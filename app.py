@@ -1,6 +1,9 @@
+
 """
 WaveEdge Backend v4 - Upstox API + Auto Token Management
 """
+import eventlet
+eventlet.monkey_patch()
 from flask import Flask, jsonify, request, redirect
 from flask_cors import CORS
 import pandas as pd
