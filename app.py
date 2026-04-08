@@ -1,7 +1,5 @@
 import os
 import requests
-import eventlet
-eventlet.monkey_patch()
 
 from flask import Flask, request, redirect, jsonify
 from flask_cors import CORS
