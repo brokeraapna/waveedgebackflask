@@ -2,7 +2,6 @@ flask
 flask-socketio
 flask-cors
 requests
-eventlet
 python-dotenv
 pandas
 numpy
