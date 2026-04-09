@@ -13,6 +13,25 @@ import requests
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("waveedge")
 
+# Load .env file if present (works both locally and on Render)
+def load_dotenv():
+    for env_file in [".env", "/etc/secrets/.env"]:
+        try:
+            with open(env_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, _, val = line.partition("=")
+                        key = key.strip()
+                        val = val.strip()
+                        if key and not os.environ.get(key):
+                            os.environ[key] = val
+            log.info(f"Loaded env from {env_file}")
+            break
+        except FileNotFoundError:
+            pass
+load_dotenv()
+
 app = Flask(__name__)
 CORS(app)
 
@@ -54,18 +73,15 @@ def save_token(data):
         log.error(f"Token save error: {e}")
 
 def get_token():
-    # Always check env var first (refreshed by user in Render)
-    env_token = os.environ.get("UPSTOX_ACCESS_TOKEN", "")
-    if env_token and env_token.startswith("eyJ"):
+    # Check env var first - strip any whitespace/newlines
+    env_token = os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip()
+    if env_token and "eyJ" in env_token:
         return env_token
-    # Then check in-memory token
-    if not _tok.get('access_token'):
-        return None
-    exp = _tok.get('expires_at', '')
-    if exp and exp < date.today().isoformat():
-        log.warning("Token expired - add new UPSTOX_ACCESS_TOKEN in Render env vars")
-        return None
-    return _tok['access_token']
+    # Check in-memory token
+    if _tok.get('access_token'):
+        t = _tok['access_token'].strip()
+        if t: return t
+    return None
 
 def exchange_code(code):
     try:
@@ -680,6 +696,18 @@ def symbols():
     })
 
 # ── STARTUP ───────────────────────────────────────────────
+# This runs when gunicorn imports the module
+load_dotenv()
+load_token()
+tok = get_token()
+log.info("=" * 50)
+log.info("WaveEdge API v5 Starting")
+log.info(f"Token valid: {bool(tok)}")
+log.info(f"Token preview: {(tok[:20] + '...') if tok else 'MISSING - set UPSTOX_ACCESS_TOKEN in Render!'}")
+log.info("=" * 50)
+threading.Thread(target=bg_warm_cache, daemon=True).start()
+threading.Thread(target=bg_keep_alive,   daemon=True).start()
+
 if __name__ == "__main__":
     load_token()
     threading.Thread(target=bg_warm_cache, daemon=True).start()
