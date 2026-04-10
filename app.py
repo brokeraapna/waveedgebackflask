@@ -382,8 +382,16 @@ def scan_ticker(ticker):
     if len(closes) >= 2:
         chg_pct = round((closes[-1] - closes[-2]) / closes[-2] * 100, 2)
 
+    # Determine market from instrument key
+    mkt = "NSE"
+    if "BSE_INDEX" in ikey: mkt = "BSE"
+    elif "NSE_INDEX" in ikey: mkt = "NSE"
+    elif "NSE_EQ" in ikey: mkt = "NSE"
+
     return {
         "symbol":     ticker.upper(),
+        "name":       ticker.upper(),
+        "market":     mkt,
         "pattern":    ew["pattern"],
         "wave":       ew["wave"],
         "confidence": ew["confidence"],
