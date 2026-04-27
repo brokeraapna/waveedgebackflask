@@ -683,95 +683,125 @@ if __name__ == "__main__":
 @app.route("/fii")
 def fii_data():
     """
-    Fetch FII/DII participant OI data.
-    Strategy: 
-    1. Try NSE public bhav CSV (no auth, public file)
-    2. Try NSE API with full browser session
-    3. Use Upstox for NIFTY spot price (reliable)
+    FII/DII participant data via NSE public CSV files + Upstox for spot.
+    NSE publishes daily bhav CSV at archives.nseindia.com - public CDN, not blocked.
     """
-    import requests as req_lib, csv, io, gzip as gz_lib
+    import requests as req_lib
+    from datetime import datetime, timedelta
+    import csv, io
 
-    result = {"data": [], "spotPrice": 0, "spotChange": 0, "spotPct": 0, "pcr": 0}
+    result = {
+        "data": [],
+        "spotPrice": 0, "spotChange": 0, "spotPct": 0,
+        "pcr": 0, "source": "unknown"
+    }
 
-    # ── STEP 1: Get NIFTY spot from Upstox (reliable) ──
+    # ── 1. NIFTY spot from Upstox (always reliable) ──
     token = get_token()
     if token:
         try:
             sr = requests.get(
-                'https://api.upstox.com/v2/market-quote/ltp',
-                params={'instrument_key': 'NSE_INDEX|Nifty 50'},
-                headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json'},
+                "https://api.upstox.com/v2/market-quote/ltp",
+                params={"instrument_key": "NSE_INDEX|Nifty 50"},
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
                 timeout=5
             )
             if sr.status_code == 200:
-                sdata = sr.json().get('data', {})
-                ltp = sdata.get('NSE_INDEX:Nifty 50', {}).get('last_price', 0)
-                result['spotPrice'] = ltp
-        except Exception as e:
-            pass
-
-    # ── STEP 2: Try NSE participant data with full browser session ──
-    try:
-        s = req_lib.Session()
-        s.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-        })
-        # Get homepage + market data page for cookies
-        s.get('https://www.nseindia.com/', timeout=10)
-        s.get('https://www.nseindia.com/market-data/live-equity-market', timeout=8)
-        
-        r = s.get(
-            'https://www.nseindia.com/api/participant-wise-trading-data?type=oi',
-            headers={
-                'Accept': 'application/json, text/plain, */*',
-                'Referer': 'https://www.nseindia.com/market-data/live-equity-market',
-                'X-Requested-With': 'XMLHttpRequest',
-            },
-            timeout=12
-        )
-        if r.status_code == 200:
-            nse_data = r.json()
-            if nse_data.get('data'):
-                result['data'] = nse_data['data']
-                if not result.get('spotPrice'):
-                    result['spotPrice'] = nse_data.get('underlyingValue', 0)
-                result['pcr'] = nse_data.get('pcr', 0)
-                return jsonify(result)
-    except Exception as e:
-        pass
-
-    # ── STEP 3: NSE blocked — build data from Upstox OI ──
-    if token:
-        try:
-            # Get NIFTY OI data from Upstox option chain
-            oc_r = requests.get(
-                'https://api.upstox.com/v2/option/chain',
-                params={'instrument_key': 'NSE_INDEX|Nifty 50', 'expiry_date': ''},
-                headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json'},
-                timeout=8
-            )
-            if oc_r.status_code == 200:
-                oc_data = oc_r.json().get('data', {})
-                total_pe = sum(x.get('put_options', {}).get('market_data', {}).get('oi', 0) for x in oc_data if x.get('put_options'))
-                total_ce = sum(x.get('call_options', {}).get('market_data', {}).get('oi', 0) for x in oc_data if x.get('call_options'))
-                if total_ce:
-                    result['pcr'] = round(total_pe / total_ce, 4)
+                ltp = sr.json().get("data", {}).get("NSE_INDEX:Nifty 50", {}).get("last_price", 0)
+                result["spotPrice"] = ltp
+                result["source"] = "upstox_spot"
         except:
             pass
 
-    # Return with whatever we have (spot from Upstox, no participant data)
-    if result['spotPrice']:
-        result['error'] = 'NSE participant data unavailable — NSE blocking server IP'
-        result['spotOnly'] = True
+    # ── 2. Participant OI from NSE public archive CSV ──
+    # NSE publishes this daily at ~6pm: archives.nseindia.com
+    # Format: fao_participant_oi_DDMMYYYY.csv
+    # Try last 5 trading days
+    headers_csv = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/csv,application/csv,*/*",
+    }
+
+    participant_data = []
+    for days_back in range(0, 8):
+        check_date = datetime.now() - timedelta(days=days_back)
+        if check_date.weekday() >= 5:  # skip weekends
+            continue
+        date_str = check_date.strftime("%d%m%Y")
+        csv_url = f"https://archives.nseindia.com/content/historical/DERIVATIVES/{check_date.year}/{check_date.strftime('%b').upper()}/fao_participant_oi_{date_str}.csv"
+
+        try:
+            r = req_lib.get(csv_url, headers=headers_csv, timeout=8)
+            if r.status_code == 200 and "Client" in r.text:
+                reader = csv.DictReader(io.StringIO(r.text))
+                rows = list(reader)
+                if rows:
+                    participant_data = rows
+                    result["dataDate"] = check_date.strftime("%d-%b-%Y")
+                    result["source"] = "nse_csv"
+                    break
+        except:
+            continue
+
+    if participant_data:
+        # Map CSV columns to our data format
+        # CSV columns: Client Type, Future Index Long, Future Index Short, etc.
+        mapped = []
+        for row in participant_data:
+            ct = row.get("Client Type", "").strip()
+            if not ct or ct == "Total":
+                continue
+            mapped.append({
+                "clientType": ct,
+                "instrumentType": "Index Futures",
+                "longQuantity":        _safe_int(row.get("Future Index Long", 0)),
+                "shortQuantity":       _safe_int(row.get("Future Index Short", 0)),
+                "changeLongQuantity":  _safe_int(row.get("Future Index Long Change", 0)),
+                "changeShortQuantity": _safe_int(row.get("Future Index Short Change", 0)),
+            })
+            # Also add option data
+            mapped.append({
+                "clientType": ct,
+                "instrumentType": "Index Calls",
+                "longQuantity":        _safe_int(row.get("Option Index Call Long", 0)),
+                "shortQuantity":       _safe_int(row.get("Option Index Call Short", 0)),
+                "changeLongQuantity":  _safe_int(row.get("Option Index Call Long Change", 0)),
+                "changeShortQuantity": _safe_int(row.get("Option Index Call Short Change", 0)),
+            })
+            mapped.append({
+                "clientType": ct,
+                "instrumentType": "Index Puts",
+                "longQuantity":        _safe_int(row.get("Option Index Put Long", 0)),
+                "shortQuantity":       _safe_int(row.get("Option Index Put Short", 0)),
+                "changeLongQuantity":  _safe_int(row.get("Option Index Put Long Change", 0)),
+                "changeShortQuantity": _safe_int(row.get("Option Index Put Short Change", 0)),
+            })
+            mapped.append({
+                "clientType": ct,
+                "instrumentType": "Stock Futures",
+                "longQuantity":        _safe_int(row.get("Future Stock Long", 0)),
+                "shortQuantity":       _safe_int(row.get("Future Stock Short", 0)),
+                "changeLongQuantity":  _safe_int(row.get("Future Stock Long Change", 0)),
+                "changeShortQuantity": _safe_int(row.get("Future Stock Short Change", 0)),
+            })
+
+        result["data"] = mapped
         return jsonify(result)
 
-    return jsonify({"error": "NSE blocked and Upstox token unavailable", "source": "all_failed"}), 503
+    # ── 3. All failed - return spot only ──
+    if result["spotPrice"]:
+        result["spotOnly"] = True
+        result["error"] = "NSE CSV unavailable - may be holiday or before 6pm"
+        return jsonify(result)
+
+    return jsonify({"error": "All data sources failed"}), 503
+
+
+def _safe_int(val):
+    try:
+        return int(str(val).replace(",", "").strip() or 0)
+    except:
+        return 0
 
 
 @app.route("/pcr")
