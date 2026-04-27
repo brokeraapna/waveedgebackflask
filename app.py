@@ -13,25 +13,6 @@ import requests
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("waveedge")
 
-# Load .env file if present (works both locally and on Render)
-def load_dotenv():
-    for env_file in [".env", "/etc/secrets/.env"]:
-        try:
-            with open(env_file) as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        key, _, val = line.partition("=")
-                        key = key.strip()
-                        val = val.strip()
-                        if key and not os.environ.get(key):
-                            os.environ[key] = val
-            log.info(f"Loaded env from {env_file}")
-            break
-        except FileNotFoundError:
-            pass
-load_dotenv()
-
 app = Flask(__name__)
 CORS(app)
 
@@ -49,17 +30,10 @@ _tok = {}
 
 def load_token():
     global _tok
-    # First check env var UPSTOX_ACCESS_TOKEN (simplest method)
-    env_token = os.environ.get("UPSTOX_ACCESS_TOKEN", "")
-    if env_token and env_token.startswith("eyJ"):
-        _tok = {"access_token": env_token, "expires_at": date.today().isoformat()}
-        log.info("Token loaded from UPSTOX_ACCESS_TOKEN env var")
-        return
-    # Then try token file
     try:
         with open(TOKEN_FILE) as f:
             _tok = json.load(f)
-        log.info(f"Token loaded from file, expires: {_tok.get('expires_at','?')}")
+        log.info(f"Token loaded, expires: {_tok.get('expires_at','?')}")
     except:
         _tok = {}
 
@@ -73,15 +47,13 @@ def save_token(data):
         log.error(f"Token save error: {e}")
 
 def get_token():
-    # Check env var first - strip any whitespace/newlines
-    env_token = os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip()
-    if env_token and "eyJ" in env_token:
-        return env_token
-    # Check in-memory token
-    if _tok.get('access_token'):
-        t = _tok['access_token'].strip()
-        if t: return t
-    return None
+    if not _tok.get('access_token'):
+        return None
+    exp = _tok.get('expires_at', '')
+    if exp and exp < date.today().isoformat():
+        log.warning("Token expired - please reconnect Upstox")
+        return None
+    return _tok['access_token']
 
 def exchange_code(code):
     try:
@@ -382,16 +354,8 @@ def scan_ticker(ticker):
     if len(closes) >= 2:
         chg_pct = round((closes[-1] - closes[-2]) / closes[-2] * 100, 2)
 
-    # Determine market from instrument key
-    mkt = "NSE"
-    if "BSE_INDEX" in ikey: mkt = "BSE"
-    elif "NSE_INDEX" in ikey: mkt = "NSE"
-    elif "NSE_EQ" in ikey: mkt = "NSE"
-
     return {
         "symbol":     ticker.upper(),
-        "name":       ticker.upper(),
-        "market":     mkt,
         "pattern":    ew["pattern"],
         "wave":       ew["wave"],
         "confidence": ew["confidence"],
@@ -704,18 +668,6 @@ def symbols():
     })
 
 # ── STARTUP ───────────────────────────────────────────────
-# This runs when gunicorn imports the module
-load_dotenv()
-load_token()
-tok = get_token()
-log.info("=" * 50)
-log.info("WaveEdge API v5 Starting")
-log.info(f"Token valid: {bool(tok)}")
-log.info(f"Token preview: {(tok[:20] + '...') if tok else 'MISSING - set UPSTOX_ACCESS_TOKEN in Render!'}")
-log.info("=" * 50)
-threading.Thread(target=bg_warm_cache, daemon=True).start()
-threading.Thread(target=bg_keep_alive,   daemon=True).start()
-
 if __name__ == "__main__":
     load_token()
     threading.Thread(target=bg_warm_cache, daemon=True).start()
@@ -727,3 +679,103 @@ if __name__ == "__main__":
         log.info(f"LOGIN URL: {SELF_URL}/upstox/login")
     log.info("=" * 50)
     app.run(host="0.0.0.0", port=5000, debug=False)
+
+@app.route("/fii")
+def fii_data():
+    """Fetch NSE participant-wise OI data server-side to bypass CORS"""
+    import urllib.request
+    import json as json_lib
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': 'https://www.nseindia.com/',
+        'Connection': 'keep-alive',
+    }
+
+    try:
+        # First hit the NSE homepage to get cookies
+        session_req = urllib.request.Request('https://www.nseindia.com', headers=headers)
+        import http.cookiejar
+        cookie_jar = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+
+        opener.open(session_req, timeout=8)
+
+        # Now fetch participant data
+        api_req = urllib.request.Request(
+            'https://www.nseindia.com/api/participant-wise-trading-data?type=oi',
+            headers=headers
+        )
+        resp = opener.open(api_req, timeout=8)
+
+        import gzip
+        raw = resp.read()
+        try:
+            raw = gzip.decompress(raw)
+        except:
+            pass
+
+        data = json_lib.loads(raw.decode('utf-8'))
+
+        # Also fetch spot price
+        spot_req = urllib.request.Request(
+            'https://www.nseindia.com/api/allIndices',
+            headers=headers
+        )
+        spot_resp = opener.open(spot_req, timeout=8)
+        spot_raw = spot_resp.read()
+        try:
+            spot_raw = gzip.decompress(spot_raw)
+        except:
+            pass
+        spot_data = json_lib.loads(spot_raw.decode('utf-8'))
+        nifty = next((x for x in spot_data.get('data', []) if x.get('indexSymbol') == 'NIFTY 50'), None)
+        if nifty:
+            data['spotPrice']  = nifty.get('last', 0)
+            data['spotChange'] = nifty.get('change', 0)
+            data['spotPct']    = nifty.get('percentChange', 0)
+
+        return jsonify(data)
+
+    except Exception as e:
+        return jsonify({"error": str(e), "source": "nse_fetch_failed"}), 500
+
+
+@app.route("/pcr")
+def pcr_data():
+    """Fetch NSE PCR data"""
+    import urllib.request, json as json_lib, http.cookiejar, gzip
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://www.nseindia.com/',
+        'Accept': 'application/json',
+    }
+    try:
+        cookie_jar = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+        opener.open(urllib.request.Request('https://www.nseindia.com', headers=headers), timeout=8)
+
+        req = urllib.request.Request(
+            'https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY',
+            headers=headers
+        )
+        resp = opener.open(req, timeout=10)
+        raw = resp.read()
+        try: raw = gzip.decompress(raw)
+        except: pass
+
+        data = json_lib.loads(raw.decode('utf-8'))
+        # Calculate PCR from option chain
+        filtered = data.get('filtered', {})
+        pcr = filtered.get('PE', {}).get('totOI', 0) / max(filtered.get('CE', {}).get('totOI', 1), 1)
+        return jsonify({
+            "pcr": round(pcr, 4),
+            "pe_oi": filtered.get('PE', {}).get('totOI', 0),
+            "ce_oi": filtered.get('CE', {}).get('totOI', 0),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
