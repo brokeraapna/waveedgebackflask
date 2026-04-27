@@ -682,58 +682,96 @@ if __name__ == "__main__":
 
 @app.route("/fii")
 def fii_data():
-    """Fetch NSE participant-wise OI data with proper session handling"""
+    """
+    Fetch FII/DII participant OI data.
+    Strategy: 
+    1. Try NSE public bhav CSV (no auth, public file)
+    2. Try NSE API with full browser session
+    3. Use Upstox for NIFTY spot price (reliable)
+    """
+    import requests as req_lib, csv, io, gzip as gz_lib
+
+    result = {"data": [], "spotPrice": 0, "spotChange": 0, "spotPct": 0, "pcr": 0}
+
+    # ── STEP 1: Get NIFTY spot from Upstox (reliable) ──
+    token = get_token()
+    if token:
+        try:
+            sr = requests.get(
+                'https://api.upstox.com/v2/market-quote/ltp',
+                params={'instrument_key': 'NSE_INDEX|Nifty 50'},
+                headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json'},
+                timeout=5
+            )
+            if sr.status_code == 200:
+                sdata = sr.json().get('data', {})
+                ltp = sdata.get('NSE_INDEX:Nifty 50', {}).get('last_price', 0)
+                result['spotPrice'] = ltp
+        except Exception as e:
+            pass
+
+    # ── STEP 2: Try NSE participant data with full browser session ──
     try:
-        import requests as req_lib
-        
-        session = req_lib.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
+        s = req_lib.Session()
+        s.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
             'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
             'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
         })
-
-        # Step 1: Get NSE session cookies
-        session.get('https://www.nseindia.com', timeout=10)
-        session.get('https://www.nseindia.com/market-data/live-equity-market', timeout=8)
-
-        # Step 2: Fetch participant OI data
-        r = session.get(
+        # Get homepage + market data page for cookies
+        s.get('https://www.nseindia.com/', timeout=10)
+        s.get('https://www.nseindia.com/market-data/live-equity-market', timeout=8)
+        
+        r = s.get(
             'https://www.nseindia.com/api/participant-wise-trading-data?type=oi',
-            headers={'Referer': 'https://www.nseindia.com/market-data/live-equity-market'},
-            timeout=10
+            headers={
+                'Accept': 'application/json, text/plain, */*',
+                'Referer': 'https://www.nseindia.com/market-data/live-equity-market',
+                'X-Requested-With': 'XMLHttpRequest',
+            },
+            timeout=12
         )
-        r.raise_for_status()
-        data = r.json()
-
-        # Step 3: Get NIFTY spot from Upstox (we already have token)
-        token = get_token()
-        if token:
-            try:
-                spot_r = requests.get(
-                    'https://api.upstox.com/v2/market-quote/ltp',
-                    params={'instrument_key': 'NSE_INDEX|Nifty 50'},
-                    headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json'},
-                    timeout=5
-                )
-                if spot_r.status_code == 200:
-                    sdata = spot_r.json().get('data', {})
-                    ltp_data = sdata.get('NSE_INDEX:Nifty 50', {})
-                    data['spotPrice'] = ltp_data.get('last_price', 0)
-            except:
-                pass
-
-        return jsonify(data)
-
+        if r.status_code == 200:
+            nse_data = r.json()
+            if nse_data.get('data'):
+                result['data'] = nse_data['data']
+                if not result.get('spotPrice'):
+                    result['spotPrice'] = nse_data.get('underlyingValue', 0)
+                result['pcr'] = nse_data.get('pcr', 0)
+                return jsonify(result)
     except Exception as e:
-        # Return structured error so frontend can show demo data gracefully
-        return jsonify({
-            "error": str(e),
-            "source": "nse_blocked",
-            "message": "NSE API blocked from cloud server. Showing cached/demo data."
-        }), 503
+        pass
+
+    # ── STEP 3: NSE blocked — build data from Upstox OI ──
+    if token:
+        try:
+            # Get NIFTY OI data from Upstox option chain
+            oc_r = requests.get(
+                'https://api.upstox.com/v2/option/chain',
+                params={'instrument_key': 'NSE_INDEX|Nifty 50', 'expiry_date': ''},
+                headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json'},
+                timeout=8
+            )
+            if oc_r.status_code == 200:
+                oc_data = oc_r.json().get('data', {})
+                total_pe = sum(x.get('put_options', {}).get('market_data', {}).get('oi', 0) for x in oc_data if x.get('put_options'))
+                total_ce = sum(x.get('call_options', {}).get('market_data', {}).get('oi', 0) for x in oc_data if x.get('call_options'))
+                if total_ce:
+                    result['pcr'] = round(total_pe / total_ce, 4)
+        except:
+            pass
+
+    # Return with whatever we have (spot from Upstox, no participant data)
+    if result['spotPrice']:
+        result['error'] = 'NSE participant data unavailable — NSE blocking server IP'
+        result['spotOnly'] = True
+        return jsonify(result)
+
+    return jsonify({"error": "NSE blocked and Upstox token unavailable", "source": "all_failed"}), 503
 
 
 @app.route("/pcr")
