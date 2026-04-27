@@ -682,100 +682,82 @@ if __name__ == "__main__":
 
 @app.route("/fii")
 def fii_data():
-    """Fetch NSE participant-wise OI data server-side to bypass CORS"""
-    import urllib.request
-    import json as json_lib
-
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Referer': 'https://www.nseindia.com/',
-        'Connection': 'keep-alive',
-    }
-
+    """Fetch NSE participant-wise OI data with proper session handling"""
     try:
-        # First hit the NSE homepage to get cookies
-        session_req = urllib.request.Request('https://www.nseindia.com', headers=headers)
-        import http.cookiejar
-        cookie_jar = http.cookiejar.CookieJar()
-        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+        import requests as req_lib
+        
+        session = req_lib.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+        })
 
-        opener.open(session_req, timeout=8)
+        # Step 1: Get NSE session cookies
+        session.get('https://www.nseindia.com', timeout=10)
+        session.get('https://www.nseindia.com/market-data/live-equity-market', timeout=8)
 
-        # Now fetch participant data
-        api_req = urllib.request.Request(
+        # Step 2: Fetch participant OI data
+        r = session.get(
             'https://www.nseindia.com/api/participant-wise-trading-data?type=oi',
-            headers=headers
+            headers={'Referer': 'https://www.nseindia.com/market-data/live-equity-market'},
+            timeout=10
         )
-        resp = opener.open(api_req, timeout=8)
+        r.raise_for_status()
+        data = r.json()
 
-        import gzip
-        raw = resp.read()
-        try:
-            raw = gzip.decompress(raw)
-        except:
-            pass
-
-        data = json_lib.loads(raw.decode('utf-8'))
-
-        # Also fetch spot price
-        spot_req = urllib.request.Request(
-            'https://www.nseindia.com/api/allIndices',
-            headers=headers
-        )
-        spot_resp = opener.open(spot_req, timeout=8)
-        spot_raw = spot_resp.read()
-        try:
-            spot_raw = gzip.decompress(spot_raw)
-        except:
-            pass
-        spot_data = json_lib.loads(spot_raw.decode('utf-8'))
-        nifty = next((x for x in spot_data.get('data', []) if x.get('indexSymbol') == 'NIFTY 50'), None)
-        if nifty:
-            data['spotPrice']  = nifty.get('last', 0)
-            data['spotChange'] = nifty.get('change', 0)
-            data['spotPct']    = nifty.get('percentChange', 0)
+        # Step 3: Get NIFTY spot from Upstox (we already have token)
+        token = get_token()
+        if token:
+            try:
+                spot_r = requests.get(
+                    'https://api.upstox.com/v2/market-quote/ltp',
+                    params={'instrument_key': 'NSE_INDEX|Nifty 50'},
+                    headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json'},
+                    timeout=5
+                )
+                if spot_r.status_code == 200:
+                    sdata = spot_r.json().get('data', {})
+                    ltp_data = sdata.get('NSE_INDEX:Nifty 50', {})
+                    data['spotPrice'] = ltp_data.get('last_price', 0)
+            except:
+                pass
 
         return jsonify(data)
 
     except Exception as e:
-        return jsonify({"error": str(e), "source": "nse_fetch_failed"}), 500
+        # Return structured error so frontend can show demo data gracefully
+        return jsonify({
+            "error": str(e),
+            "source": "nse_blocked",
+            "message": "NSE API blocked from cloud server. Showing cached/demo data."
+        }), 503
 
 
 @app.route("/pcr")
 def pcr_data():
-    """Fetch NSE PCR data"""
-    import urllib.request, json as json_lib, http.cookiejar, gzip
-
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Referer': 'https://www.nseindia.com/',
-        'Accept': 'application/json',
-    }
+    """Fetch NSE PCR from option chain"""
     try:
-        cookie_jar = http.cookiejar.CookieJar()
-        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
-        opener.open(urllib.request.Request('https://www.nseindia.com', headers=headers), timeout=8)
-
-        req = urllib.request.Request(
-            'https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY',
-            headers=headers
-        )
-        resp = opener.open(req, timeout=10)
-        raw = resp.read()
-        try: raw = gzip.decompress(raw)
-        except: pass
-
-        data = json_lib.loads(raw.decode('utf-8'))
-        # Calculate PCR from option chain
-        filtered = data.get('filtered', {})
-        pcr = filtered.get('PE', {}).get('totOI', 0) / max(filtered.get('CE', {}).get('totOI', 1), 1)
-        return jsonify({
-            "pcr": round(pcr, 4),
-            "pe_oi": filtered.get('PE', {}).get('totOI', 0),
-            "ce_oi": filtered.get('CE', {}).get('totOI', 0),
+        import requests as req_lib
+        session = req_lib.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': '*/*', 'Accept-Language': 'en-US,en;q=0.9',
         })
+        session.get('https://www.nseindia.com', timeout=8)
+        r = session.get(
+            'https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY',
+            headers={'Referer': 'https://www.nseindia.com/option-chain'},
+            timeout=10
+        )
+        r.raise_for_status()
+        data = r.json()
+        filtered = data.get('filtered', {})
+        pe_oi = filtered.get('PE', {}).get('totOI', 0)
+        ce_oi = filtered.get('CE', {}).get('totOI', 1)
+        pcr = round(pe_oi / max(ce_oi, 1), 4)
+        return jsonify({"pcr": pcr, "pe_oi": pe_oi, "ce_oi": ce_oi})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e)}), 503
