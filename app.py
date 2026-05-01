@@ -689,6 +689,46 @@ if __name__ == "__main__":
     log.info("WaveEdge API v5 — Upstox Edition")
     log.info(f"Token valid: {bool(get_token())}")
     if not get_token():
+    import requests
+from flask import jsonify
+
+NSE_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Accept': '*/*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': 'https://www.nseindia.com/',
+}
+
+@app.route('/nse/fii-data')
+def nse_fii_data():
+    try:
+        session = requests.Session()
+        # Prime NSE cookies first
+        session.get('https://www.nseindia.com', headers=NSE_HEADERS, timeout=10)
+        r = session.get(
+            'https://www.nseindia.com/api/participant-wise-trading-data?type=oi',
+            headers=NSE_HEADERS, timeout=10
+        )
+        return jsonify(r.json())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/nse/pcr')
+def nse_pcr():
+    try:
+        session = requests.Session()
+        session.get('https://www.nseindia.com', headers=NSE_HEADERS, timeout=10)
+        r = session.get(
+            'https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY',
+            headers=NSE_HEADERS, timeout=10
+        )
+        data = r.json()
+        f = data.get('filtered', {})
+        pe = f.get('PE', {}).get('totOI', 0)
+        ce = f.get('CE', {}).get('totOI', 1)
+        return jsonify({'pcr': round(pe/ce, 4)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
         log.info(f"LOGIN URL: {SELF_URL}/upstox/login")
     log.info("=" * 50)
     app.run(host="0.0.0.0", port=5000, debug=False)
