@@ -19,9 +19,9 @@ CORS(app)
 # ── CONFIG ────────────────────────────────────────────────
 CLIENT_ID     = os.environ.get("UPSTOX_API_KEY",       "952b375b-2750-4bd0-827d-ffe1cd44a8b8")
 CLIENT_SECRET = os.environ.get("UPSTOX_API_SECRET",    "")
-REDIRECT_URI  = os.environ.get("REDIRECT_URL",         "https://waveedgebackflask-2.onrender.com/upstox/callback")
+REDIRECT_URI  = os.environ.get("REDIRECT_URL",         "https://waveedgebackflask-kexj.onrender.com/upstox/callback")
 ADMIN_KEY     = os.environ.get("ADMIN_KEY",             "waveedge2024")
-SELF_URL      = os.environ.get("FRONTEND_URL",          "https://waveedgebackflask-2.onrender.com")
+SELF_URL      = os.environ.get("FRONTEND_URL",          "https://waveedgebackflask-kexj.onrender.com")
 TOKEN_FILE    = "upstox_token.json"
 POSTS_FILE    = "blog_posts.json"
 
@@ -30,6 +30,16 @@ _tok = {}
 
 def load_token():
     global _tok
+    # First check environment variable (set via Render dashboard)
+    env_token = os.environ.get("UPSTOX_ACCESS_TOKEN", "")
+    if env_token:
+        _tok = {
+            "access_token": env_token.strip(),
+            "expires_at": (date.today() + timedelta(days=1)).isoformat(),
+            "source": "env"
+        }
+        log.info("Token loaded from UPSTOX_ACCESS_TOKEN env var")
+        return
     try:
         with open(TOKEN_FILE) as f:
             _tok = json.load(f)
@@ -502,6 +512,9 @@ def upstox_callback():
 
     ok, err = exchange_code(code)
     if ok:
+                # Log token to Render logs for easy env var setup
+        if _tok.get('access_token'):
+            log.info(f"NEW TOKEN (first 20 chars): {_tok['access_token'][:20]}...")
         return _html_page(
             "✅ Upstox Connected!",
             "Real-time NSE data is now live on WaveEdge.<br>Token refreshes daily — click Reconnect each morning.",
@@ -679,153 +692,3 @@ if __name__ == "__main__":
         log.info(f"LOGIN URL: {SELF_URL}/upstox/login")
     log.info("=" * 50)
     app.run(host="0.0.0.0", port=5000, debug=False)
-
-@app.route("/fii")
-def fii_data():
-    """
-    FII/DII participant data via NSE public CSV files + Upstox for spot.
-    NSE publishes daily bhav CSV at archives.nseindia.com - public CDN, not blocked.
-    """
-    import requests as req_lib
-    from datetime import datetime, timedelta
-    import csv, io
-
-    result = {
-        "data": [],
-        "spotPrice": 0, "spotChange": 0, "spotPct": 0,
-        "pcr": 0, "source": "unknown"
-    }
-
-    # ── 1. NIFTY spot from Upstox (always reliable) ──
-    token = get_token()
-    if token:
-        try:
-            sr = requests.get(
-                "https://api.upstox.com/v2/market-quote/ltp",
-                params={"instrument_key": "NSE_INDEX|Nifty 50"},
-                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-                timeout=5
-            )
-            if sr.status_code == 200:
-                ltp = sr.json().get("data", {}).get("NSE_INDEX:Nifty 50", {}).get("last_price", 0)
-                result["spotPrice"] = ltp
-                result["source"] = "upstox_spot"
-        except:
-            pass
-
-    # ── 2. Participant OI from NSE public archive CSV ──
-    # NSE publishes this daily at ~6pm: archives.nseindia.com
-    # Format: fao_participant_oi_DDMMYYYY.csv
-    # Try last 5 trading days
-    headers_csv = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "text/csv,application/csv,*/*",
-    }
-
-    participant_data = []
-    for days_back in range(0, 8):
-        check_date = datetime.now() - timedelta(days=days_back)
-        if check_date.weekday() >= 5:  # skip weekends
-            continue
-        date_str = check_date.strftime("%d%m%Y")
-        csv_url = f"https://archives.nseindia.com/content/historical/DERIVATIVES/{check_date.year}/{check_date.strftime('%b').upper()}/fao_participant_oi_{date_str}.csv"
-
-        try:
-            r = req_lib.get(csv_url, headers=headers_csv, timeout=8)
-            if r.status_code == 200 and "Client" in r.text:
-                reader = csv.DictReader(io.StringIO(r.text))
-                rows = list(reader)
-                if rows:
-                    participant_data = rows
-                    result["dataDate"] = check_date.strftime("%d-%b-%Y")
-                    result["source"] = "nse_csv"
-                    break
-        except:
-            continue
-
-    if participant_data:
-        # Map CSV columns to our data format
-        # CSV columns: Client Type, Future Index Long, Future Index Short, etc.
-        mapped = []
-        for row in participant_data:
-            ct = row.get("Client Type", "").strip()
-            if not ct or ct == "Total":
-                continue
-            mapped.append({
-                "clientType": ct,
-                "instrumentType": "Index Futures",
-                "longQuantity":        _safe_int(row.get("Future Index Long", 0)),
-                "shortQuantity":       _safe_int(row.get("Future Index Short", 0)),
-                "changeLongQuantity":  _safe_int(row.get("Future Index Long Change", 0)),
-                "changeShortQuantity": _safe_int(row.get("Future Index Short Change", 0)),
-            })
-            # Also add option data
-            mapped.append({
-                "clientType": ct,
-                "instrumentType": "Index Calls",
-                "longQuantity":        _safe_int(row.get("Option Index Call Long", 0)),
-                "shortQuantity":       _safe_int(row.get("Option Index Call Short", 0)),
-                "changeLongQuantity":  _safe_int(row.get("Option Index Call Long Change", 0)),
-                "changeShortQuantity": _safe_int(row.get("Option Index Call Short Change", 0)),
-            })
-            mapped.append({
-                "clientType": ct,
-                "instrumentType": "Index Puts",
-                "longQuantity":        _safe_int(row.get("Option Index Put Long", 0)),
-                "shortQuantity":       _safe_int(row.get("Option Index Put Short", 0)),
-                "changeLongQuantity":  _safe_int(row.get("Option Index Put Long Change", 0)),
-                "changeShortQuantity": _safe_int(row.get("Option Index Put Short Change", 0)),
-            })
-            mapped.append({
-                "clientType": ct,
-                "instrumentType": "Stock Futures",
-                "longQuantity":        _safe_int(row.get("Future Stock Long", 0)),
-                "shortQuantity":       _safe_int(row.get("Future Stock Short", 0)),
-                "changeLongQuantity":  _safe_int(row.get("Future Stock Long Change", 0)),
-                "changeShortQuantity": _safe_int(row.get("Future Stock Short Change", 0)),
-            })
-
-        result["data"] = mapped
-        return jsonify(result)
-
-    # ── 3. All failed - return spot only ──
-    if result["spotPrice"]:
-        result["spotOnly"] = True
-        result["error"] = "NSE CSV unavailable - may be holiday or before 6pm"
-        return jsonify(result)
-
-    return jsonify({"error": "All data sources failed"}), 503
-
-
-def _safe_int(val):
-    try:
-        return int(str(val).replace(",", "").strip() or 0)
-    except:
-        return 0
-
-
-@app.route("/pcr")
-def pcr_data():
-    """Fetch NSE PCR from option chain"""
-    try:
-        import requests as req_lib
-        session = req_lib.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': '*/*', 'Accept-Language': 'en-US,en;q=0.9',
-        })
-        session.get('https://www.nseindia.com', timeout=8)
-        r = session.get(
-            'https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY',
-            headers={'Referer': 'https://www.nseindia.com/option-chain'},
-            timeout=10
-        )
-        r.raise_for_status()
-        data = r.json()
-        filtered = data.get('filtered', {})
-        pe_oi = filtered.get('PE', {}).get('totOI', 0)
-        ce_oi = filtered.get('CE', {}).get('totOI', 1)
-        pcr = round(pe_oi / max(ce_oi, 1), 4)
-        return jsonify({"pcr": pcr, "pe_oi": pe_oi, "ce_oi": ce_oi})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 503
