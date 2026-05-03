@@ -1137,26 +1137,8 @@ def auto_refresh_token():
         return False
 
 def bg_auto_refresh():
-    """Background thread: refresh token daily at 8:45am IST."""
-    time.sleep(30)  # Wait for startup
-    while True:
-        try:
-            now_ist = datetime.utcnow() + timedelta(hours=5, minutes=30)
-            # Check if token is expired or missing
-            token = get_token()
-            token_date = _tok.get("expires_at", "")
-            token_expired = not token or token_date < date.today().isoformat()
-
-            # Refresh at 8:45am IST or if token is expired
-            if token_expired or (now_ist.hour == 8 and now_ist.minute == 45):
-                log.info(f"Token expired={token_expired}, time={now_ist.strftime('%H:%M')} — attempting auto-refresh")
-                auto_refresh_token()
-                time.sleep(60)  # avoid re-triggering in same minute
-            else:
-                time.sleep(30)
-        except Exception as e:
-            log.error(f"bg_auto_refresh error: {e}")
-            time.sleep(60)
+    """Disabled - Upstox does not support programmatic auto-login."""
+    pass
 
 @app.route("/upstox/auto-refresh")
 def manual_auto_refresh():
@@ -1313,7 +1295,6 @@ load_token()
 threading.Thread(target=load_instrument_file, daemon=True).start()
 threading.Thread(target=bg_warm_cache, daemon=True).start()
 threading.Thread(target=bg_keep_alive, daemon=True).start()
-threading.Thread(target=bg_auto_refresh, daemon=True).start()
 log.info("=" * 50)
 log.info("WaveEdge API v5.1 — Upstox Edition")
 log.info(f"Token valid: {bool(get_token())}")
