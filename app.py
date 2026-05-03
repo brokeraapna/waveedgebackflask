@@ -166,6 +166,57 @@ DEFAULT_SCRIPS = [
 ]
 
 # ── CACHE ─────────────────────────────────────────────────
+
+# DYNAMIC INSTRUMENT LOOKUP
+_instrument_map    = {}
+_instrument_loaded = False
+INSTRUMENT_FILE    = "nse_instruments.json"
+
+def load_instrument_file():
+    global _instrument_map, _instrument_loaded
+    try:
+        if os.path.exists(INSTRUMENT_FILE):
+            age = time.time() - os.path.getmtime(INSTRUMENT_FILE)
+            if age < 86400:
+                with open(INSTRUMENT_FILE) as f:
+                    _instrument_map = json.load(f)
+                log.info(f"Instruments loaded from cache: {len(_instrument_map)} symbols")
+                _instrument_loaded = True
+                return
+        log.info("Downloading Upstox NSE instruments...")
+        r = requests.get(
+            "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz",
+            timeout=30
+        )
+        if r.status_code == 200:
+            import gzip, io
+            with gzip.open(io.BytesIO(r.content)) as f:
+                instruments = json.load(f)
+            mp = {}
+            for inst in instruments:
+                if inst.get("instrument_type") == "EQ" and inst.get("segment") == "NSE_EQ":
+                    sym  = inst.get("trading_symbol", "").upper()
+                    ikey = inst.get("instrument_key", "")
+                    if sym and ikey:
+                        mp[sym] = ikey
+            _instrument_map = mp
+            with open(INSTRUMENT_FILE, 'w') as f:
+                json.dump(mp, f)
+            log.info(f"Downloaded {len(mp)} NSE EQ instruments")
+            _instrument_loaded = True
+        else:
+            log.warning(f"Instrument download failed: {r.status_code}")
+    except Exception as e:
+        log.error(f"Instrument load error: {e}")
+
+def resolve_instrument(ticker):
+    ticker = ticker.upper().strip()
+    if ticker in INSTRUMENTS:
+        return INSTRUMENTS[ticker]
+    if ticker in _instrument_map:
+        return _instrument_map[ticker]
+    return None
+
 _cache    = {}
 _cache_ts = {}
 CACHE_TTL = 300  # 5 min
@@ -234,7 +285,7 @@ EMPTY_SIG = {"signal": "—", "zero": "—", "crossover": False, "histogram": 0}
 
 def get_signals(ticker, timeframes):
     ticker = ticker.upper().strip()
-    ikey   = INSTRUMENTS.get(ticker)
+    ikey   = resolve_instrument(ticker)
     result = {"symbol": ticker, "timeframes": {}, "timestamp": datetime.utcnow().isoformat()}
 
     if not ikey:
@@ -325,7 +376,7 @@ def get_ltp(instrument_key):
     return None
 
 def scan_ticker(ticker):
-    ikey = INSTRUMENTS.get(ticker.upper())
+    ikey = resolve_instrument(ticker.upper())
     if not ikey:
         return None
 
@@ -807,6 +858,7 @@ def pcr_data():
 
 # ── STARTUP ───────────────────────────────────────────────
 load_token()
+threading.Thread(target=load_instrument_file, daemon=True).start()
 threading.Thread(target=bg_warm_cache, daemon=True).start()
 threading.Thread(target=bg_keep_alive, daemon=True).start()
 log.info("=" * 50)
