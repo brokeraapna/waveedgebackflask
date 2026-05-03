@@ -1073,14 +1073,20 @@ UPSTOX_PIN       = os.environ.get("UPSTOX_PIN", "")
 UPSTOX_TOTP_SECRET = os.environ.get("UPSTOX_TOTP_SECRET", "")
 
 def generate_totp():
-    """Generate current TOTP code from secret."""
+    """Generate current TOTP code from secret (supports Base32 and Base64)."""
     try:
         import hmac, hashlib, base64, struct
-        secret = UPSTOX_TOTP_SECRET.upper().replace(" ", "")
-        # Add padding
-        missing = len(secret) % 8
-        if missing: secret += '=' * (8 - missing)
-        key = base64.b32decode(secret)
+        secret = UPSTOX_TOTP_SECRET.strip()
+        # Try Base32 first (standard TOTP)
+        try:
+            b32 = secret.upper().replace(" ", "")
+            missing = len(b32) % 8
+            if missing: b32 += '=' * (8 - missing)
+            key = base64.b32decode(b32)
+        except Exception:
+            # Fall back to Base64 (Upstox format)
+            padded = secret + '=' * (4 - len(secret) % 4)
+            key = base64.b64decode(padded)
         t = int(time.time()) // 30
         msg = struct.pack('>Q', t)
         h = hmac.new(key, msg, hashlib.sha1).digest()
@@ -1259,6 +1265,40 @@ def create_order():
         return jsonify(r.json())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/subscription/create-code", methods=["POST"])
+def create_code():
+    """Admin: manually create access code for a customer."""
+    data    = request.get_json() or {}
+    key     = data.get("admin_key", "")
+    if key != ADMIN_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+    email   = data.get("email", "").strip()
+    plan    = data.get("plan", "professional")
+    payref  = data.get("payment_ref", "manual")
+    if not email:
+        return jsonify({"error": "email required"}), 400
+    days    = 365 if plan == "institutional" else 30
+    code    = generate_access_code()
+    subs    = load_subscriptions()
+    subs[code] = {
+        "payment_id":  payref,
+        "order_id":    f"manual-{int(time.time())}",
+        "plan":        plan,
+        "email":       email,
+        "created_at":  datetime.utcnow().isoformat(),
+        "expires_at":  (datetime.utcnow() + timedelta(days=days)).isoformat(),
+        "active":      True
+    }
+    save_subscriptions(subs)
+    log.info(f"Manual code created: {code} plan={plan} email={email}")
+    return jsonify({
+        "success":     True,
+        "access_code": code,
+        "plan":        plan,
+        "expires_at":  subs[code]["expires_at"]
+    })
 
 @app.route("/subscription/admin")
 def admin_subscriptions():
