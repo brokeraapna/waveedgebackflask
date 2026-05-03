@@ -354,6 +354,8 @@ INSTRUMENTS = {
     "YESBANK":    "NSE_EQ|INE528G01035",
     "ZEEL":       "NSE_EQ|INE256A01028",
     "ZOMATO":     "NSE_EQ|INE758T01015",
+    "NYKAA":      "NSE_EQ|INE388Y01029",
+    "SUZLON":     "NSE_EQ|INE040H01021",
     "ZYDUSLIFE":  "NSE_EQ|INE010B01027",
 }
 
@@ -1064,11 +1066,214 @@ def pcr_data():
         return jsonify({"error": str(e)}), 503
 
 
+
+# ── TOTP AUTO TOKEN REFRESH ───────────────────────────────
+UPSTOX_USERNAME  = os.environ.get("UPSTOX_USERNAME", "")
+UPSTOX_PIN       = os.environ.get("UPSTOX_PIN", "")
+UPSTOX_TOTP_SECRET = os.environ.get("UPSTOX_TOTP_SECRET", "")
+
+def generate_totp():
+    """Generate current TOTP code from secret."""
+    try:
+        import hmac, hashlib, base64, struct
+        secret = UPSTOX_TOTP_SECRET.upper().replace(" ", "")
+        # Add padding
+        missing = len(secret) % 8
+        if missing: secret += '=' * (8 - missing)
+        key = base64.b32decode(secret)
+        t = int(time.time()) // 30
+        msg = struct.pack('>Q', t)
+        h = hmac.new(key, msg, hashlib.sha1).digest()
+        offset = h[-1] & 0x0f
+        code = struct.unpack('>I', h[offset:offset+4])[0] & 0x7fffffff
+        return str(code % 1000000).zfill(6)
+    except Exception as e:
+        log.error(f"TOTP generation error: {e}")
+        return None
+
+def auto_refresh_token():
+    """Auto-refresh Upstox token using TOTP."""
+    if not all([UPSTOX_USERNAME, UPSTOX_PIN, UPSTOX_TOTP_SECRET, CLIENT_ID, CLIENT_SECRET]):
+        log.warning("Auto-refresh: missing credentials, skipping")
+        return False
+    try:
+        log.info("Auto-refreshing Upstox token...")
+        totp = generate_totp()
+        if not totp:
+            return False
+
+        session = requests.Session()
+        # Step 1: Get auth code
+        r1 = session.post(
+            "https://api.upstox.com/v2/login/authorization/token",
+            json={
+                "mobile_number": UPSTOX_USERNAME,
+                "pin": UPSTOX_PIN,
+                "client_id": CLIENT_ID,
+                "totp": totp,
+            },
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            timeout=15
+        )
+        log.info(f"Auth step 1: {r1.status_code} {r1.text[:200]}")
+
+        if r1.status_code == 200:
+            auth_code = r1.json().get("data", {}).get("code")
+            if auth_code:
+                ok, err = exchange_code(auth_code)
+                if ok:
+                    log.info("Auto-refresh successful!")
+                    return True
+                log.error(f"Token exchange failed: {err}")
+        return False
+    except Exception as e:
+        log.error(f"Auto-refresh error: {e}")
+        return False
+
+def bg_auto_refresh():
+    """Background thread: refresh token daily at 8:45am IST."""
+    time.sleep(30)  # Wait for startup
+    while True:
+        try:
+            now_ist = datetime.utcnow() + timedelta(hours=5, minutes=30)
+            # Check if token is expired or missing
+            token = get_token()
+            token_date = _tok.get("expires_at", "")
+            token_expired = not token or token_date < date.today().isoformat()
+
+            # Refresh at 8:45am IST or if token is expired
+            if token_expired or (now_ist.hour == 8 and now_ist.minute == 45):
+                log.info(f"Token expired={token_expired}, time={now_ist.strftime('%H:%M')} — attempting auto-refresh")
+                auto_refresh_token()
+                time.sleep(60)  # avoid re-triggering in same minute
+            else:
+                time.sleep(30)
+        except Exception as e:
+            log.error(f"bg_auto_refresh error: {e}")
+            time.sleep(60)
+
+@app.route("/upstox/auto-refresh")
+def manual_auto_refresh():
+    """Manually trigger token auto-refresh."""
+    if not all([UPSTOX_USERNAME, UPSTOX_PIN, UPSTOX_TOTP_SECRET]):
+        return jsonify({"error": "TOTP credentials not configured in environment"}), 400
+    ok = auto_refresh_token()
+    return jsonify({"success": ok, "token_valid": bool(get_token())})
+
+# ── RAZORPAY SUBSCRIPTION ─────────────────────────────────
+RAZORPAY_KEY    = os.environ.get("RAZORPAY_KEY_ID", "")
+RAZORPAY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
+SUBSCRIPTIONS_FILE = "subscriptions.json"
+
+def load_subscriptions():
+    try:
+        with open(SUBSCRIPTIONS_FILE) as f: return json.load(f)
+    except: return {}
+
+def save_subscriptions(data):
+    try:
+        with open(SUBSCRIPTIONS_FILE, 'w') as f: json.dump(data, f, indent=2)
+    except: pass
+
+def generate_access_code():
+    import hashlib, secrets
+    return "WE-" + secrets.token_hex(6).upper()
+
+@app.route("/subscription/verify", methods=["POST"])
+def verify_subscription():
+    """Verify Razorpay payment and generate access code."""
+    data = request.get_json() or {}
+    payment_id  = data.get("razorpay_payment_id", "")
+    order_id    = data.get("razorpay_order_id", "")
+    signature   = data.get("razorpay_signature", "")
+    plan        = data.get("plan", "professional")
+    email       = data.get("email", "")
+
+    if not all([payment_id, order_id, signature]):
+        return jsonify({"error": "Missing payment details"}), 400
+
+    # Verify signature
+    try:
+        import hmac, hashlib
+        msg = f"{order_id}|{payment_id}".encode()
+        expected = hmac.new(RAZORPAY_SECRET.encode(), msg, hashlib.sha256).hexdigest()
+        if expected != signature:
+            return jsonify({"error": "Invalid signature"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+    # Generate access code
+    code = generate_access_code()
+    subs = load_subscriptions()
+    subs[code] = {
+        "payment_id": payment_id,
+        "order_id":   order_id,
+        "plan":       plan,
+        "email":      email,
+        "created_at": datetime.utcnow().isoformat(),
+        "expires_at": (datetime.utcnow() + timedelta(days=30)).isoformat(),
+        "active":     True
+    }
+    save_subscriptions(subs)
+    log.info(f"New subscription: {code} plan={plan} email={email}")
+    return jsonify({"success": True, "access_code": code, "plan": plan})
+
+@app.route("/subscription/check/<code>")
+def check_subscription(code):
+    """Check if access code is valid."""
+    subs = load_subscriptions()
+    sub  = subs.get(code.upper())
+    if not sub:
+        return jsonify({"valid": False, "error": "Invalid code"}), 404
+    if not sub.get("active"):
+        return jsonify({"valid": False, "error": "Subscription inactive"}), 403
+    # Check expiry
+    try:
+        exp = datetime.fromisoformat(sub["expires_at"])
+        if datetime.utcnow() > exp:
+            return jsonify({"valid": False, "error": "Subscription expired"}), 403
+    except: pass
+    return jsonify({
+        "valid":      True,
+        "plan":       sub.get("plan"),
+        "expires_at": sub.get("expires_at"),
+        "email":      sub.get("email", "")
+    })
+
+@app.route("/subscription/create-order", methods=["POST"])
+def create_order():
+    """Create Razorpay order."""
+    if not RAZORPAY_KEY or not RAZORPAY_SECRET:
+        return jsonify({"error": "Razorpay not configured"}), 400
+    data   = request.get_json() or {}
+    plan   = data.get("plan", "professional")
+    prices = {"starter": 49900, "professional": 99900, "institutional": 199900}  # paise
+    amount = prices.get(plan, 99900)
+    try:
+        r = requests.post(
+            "https://api.razorpay.com/v1/orders",
+            auth=(RAZORPAY_KEY, RAZORPAY_SECRET),
+            json={"amount": amount, "currency": "INR", "receipt": f"WE-{plan}-{int(time.time())}"},
+            timeout=10
+        )
+        return jsonify(r.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/subscription/admin")
+def admin_subscriptions():
+    """Admin view of all subscriptions."""
+    if request.args.get("key") != ADMIN_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+    subs = load_subscriptions()
+    return jsonify({"count": len(subs), "subscriptions": subs})
+
 # ── STARTUP ───────────────────────────────────────────────
 load_token()
 threading.Thread(target=load_instrument_file, daemon=True).start()
 threading.Thread(target=bg_warm_cache, daemon=True).start()
 threading.Thread(target=bg_keep_alive, daemon=True).start()
+threading.Thread(target=bg_auto_refresh, daemon=True).start()
 log.info("=" * 50)
 log.info("WaveEdge API v5.1 — Upstox Edition")
 log.info(f"Token valid: {bool(get_token())}")
