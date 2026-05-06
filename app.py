@@ -30,21 +30,34 @@ _tok = {}
 
 def load_token():
     global _tok
+    # First try environment variable (survives Render restarts)
+    env_token = os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip()
+    if env_token:
+        _tok = {"access_token": env_token, "expires_at": date.today().isoformat()}
+        log.info("Token loaded from environment variable")
+        return
+    # Fall back to file
     try:
         with open(TOKEN_FILE) as f:
             _tok = json.load(f)
-        log.info(f"Token loaded, expires: {_tok.get('expires_at','?')}")
+        log.info(f"Token loaded from file, expires: {_tok.get('expires_at','?')}")
     except:
         _tok = {}
+        log.warning("No token found - please reconnect Upstox")
 
 def save_token(data):
     global _tok
     _tok = data
+    # Save to file
     try:
         with open(TOKEN_FILE, 'w') as f:
             json.dump(data, f)
     except Exception as e:
         log.error(f"Token save error: {e}")
+    # Also update environment variable in memory
+    if data.get('access_token'):
+        os.environ["UPSTOX_ACCESS_TOKEN"] = data['access_token']
+        log.info("Token saved to file and environment")
 
 def get_token():
     if not _tok.get('access_token'):
