@@ -1274,7 +1274,7 @@ def create_code():
     payref  = data.get("payment_ref", "manual")
     if not email:
         return jsonify({"error": "email required"}), 400
-    days    = 365 if plan == "institutional" else 30
+    days    = 30
     code    = generate_access_code()
     subs    = load_subscriptions()
     subs[code] = {
