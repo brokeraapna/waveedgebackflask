@@ -1161,6 +1161,58 @@ def manual_auto_refresh():
     ok = auto_refresh_token()
     return jsonify({"success": ok, "token_valid": bool(get_token())})
 
+
+# ── WAVE COUNTS ───────────────────────────────────────────
+WAVECOUNTS_FILE = "wavecounts.json"
+
+def load_wavecounts():
+    try:
+        with open(WAVECOUNTS_FILE) as f: return json.load(f)
+    except: return []
+
+def save_wavecounts(posts):
+    try:
+        with open(WAVECOUNTS_FILE, 'w') as f: json.dump(posts[:60], f, indent=2)
+    except: pass
+
+@app.route("/wavecounts/latest")
+def wavecounts_latest():
+    posts = load_wavecounts()
+    if not posts:
+        return jsonify({"error": "no_data"}), 404
+    return jsonify(posts[0])
+
+@app.route("/wavecounts")
+def wavecounts_list():
+    posts = load_wavecounts()
+    limit = int(request.args.get("limit", 10))
+    return jsonify({"count": len(posts), "posts": posts[:limit]})
+
+@app.route("/wavecounts/post", methods=["POST"])
+def wavecounts_post():
+    if request.headers.get("X-Admin-Key") != ADMIN_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+    data = request.get_json() or {}
+    posts = load_wavecounts()
+    data["id"]   = int(time.time() * 1000)
+    data["date"] = datetime.utcnow().isoformat()
+    # Replace today's post if already exists
+    today = datetime.utcnow().date().isoformat()
+    posts = [p for p in posts if not p.get("date","").startswith(today)]
+    posts.insert(0, data)
+    save_wavecounts(posts)
+    log.info(f"Wave count posted for {today}")
+    return jsonify({"success": True, "id": data["id"]})
+
+@app.route("/wavecounts/delete/<int:post_id>", methods=["DELETE"])
+def wavecounts_delete(post_id):
+    if request.headers.get("X-Admin-Key") != ADMIN_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+    posts = load_wavecounts()
+    posts = [p for p in posts if p.get("id") != post_id]
+    save_wavecounts(posts)
+    return jsonify({"success": True})
+
 # ── RAZORPAY SUBSCRIPTION ─────────────────────────────────
 RAZORPAY_KEY    = os.environ.get("RAZORPAY_KEY_ID", "")
 RAZORPAY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
