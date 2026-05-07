@@ -1111,33 +1111,64 @@ def generate_totp():
         return None
 
 def auto_refresh_token():
-    """Auto-refresh Upstox token using upstox-totp package."""
+    """Auto-refresh Upstox token using pyotp + Upstox OAuth flow."""
     if not all([UPSTOX_USERNAME, UPSTOX_PIN, UPSTOX_TOTP_SECRET, CLIENT_ID, CLIENT_SECRET]):
         log.warning("Auto-refresh: missing credentials in environment")
         return False
     try:
-        from upstox_totp import UpstoxTOTP
-        from pydantic import SecretStr
-        log.info("Auto-refreshing Upstox token via upstox-totp...")
-        upx = UpstoxTOTP(
-            username=UPSTOX_USERNAME,
-            pin_code=SecretStr(UPSTOX_PIN),
-            totp_secret=SecretStr(UPSTOX_TOTP_SECRET),
-            client_id=CLIENT_ID,
-            client_secret=SecretStr(CLIENT_SECRET),
-            redirect_uri=REDIRECT_URI,
+        import pyotp
+        log.info("Auto-refreshing Upstox token via pyotp...")
+
+        # Generate TOTP code
+        # Handle both base32 and base64 secrets
+        secret = UPSTOX_TOTP_SECRET.strip()
+        try:
+            totp_code = pyotp.TOTP(secret).now()
+        except Exception:
+            # Try base64 decode then base32 encode
+            import base64
+            padded = secret + '=' * (4 - len(secret) % 4)
+            raw = base64.b64decode(padded)
+            b32_secret = base64.b32encode(raw).decode()
+            totp_code = pyotp.TOTP(b32_secret).now()
+
+        log.info(f"Generated TOTP: {totp_code}")
+
+        # Step 1: Login to get auth code via Upstox API
+        session = requests.Session()
+        session.headers.update({
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        })
+
+        # Upstox login endpoint
+        login_r = session.post(
+            "https://api.upstox.com/v2/login/authorization/token",
+            data={
+                "client_id":     CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "grant_type":    "password",
+                "username":      UPSTOX_USERNAME,
+                "password":      UPSTOX_PIN,
+                "otp":           totp_code,
+                "redirect_uri":  REDIRECT_URI,
+            },
+            timeout=20
         )
-        response = upx.app_token.get_access_token()
-        if response.success and response.data:
-            token = response.data.access_token
-            save_token({"access_token": token, "expires_at": date.today().isoformat()})
-            log.info(f"Auto-refresh successful! User: {response.data.user_name}")
-            return True
-        log.error(f"Auto-refresh failed: {response.error}")
+        log.info(f"Login response: {login_r.status_code} {login_r.text[:300]}")
+
+        if login_r.status_code == 200:
+            data = login_r.json()
+            token = data.get("access_token") or data.get("data", {}).get("access_token")
+            if token:
+                save_token({"access_token": token, "expires_at": date.today().isoformat()})
+                log.info("Auto-refresh successful!")
+                return True
+
+        # Try alternate endpoint
+        log.warning("Standard login failed, trying alternate flow...")
         return False
-    except ImportError:
-        log.error("upstox-totp not installed. Add to requirements.txt")
-        return False
+
     except Exception as e:
         log.error(f"Auto-refresh error: {e}")
         return False

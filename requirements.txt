@@ -3,6 +3,5 @@ flask-cors
 requests
 pandas
 numpy
-upstox-totp
 pyotp
 gunicorn
