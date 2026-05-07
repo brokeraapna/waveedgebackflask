@@ -1111,47 +1111,54 @@ def generate_totp():
         return None
 
 def auto_refresh_token():
-    """Auto-refresh Upstox token using TOTP."""
+    """Auto-refresh Upstox token using upstox-totp package."""
     if not all([UPSTOX_USERNAME, UPSTOX_PIN, UPSTOX_TOTP_SECRET, CLIENT_ID, CLIENT_SECRET]):
-        log.warning("Auto-refresh: missing credentials, skipping")
+        log.warning("Auto-refresh: missing credentials in environment")
         return False
     try:
-        log.info("Auto-refreshing Upstox token...")
-        totp = generate_totp()
-        if not totp:
-            return False
-
-        session = requests.Session()
-        # Step 1: Get auth code
-        r1 = session.post(
-            "https://api.upstox.com/v2/login/authorization/token",
-            json={
-                "mobile_number": UPSTOX_USERNAME,
-                "pin": UPSTOX_PIN,
-                "client_id": CLIENT_ID,
-                "totp": totp,
-            },
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            timeout=15
+        from upstox_totp import UpstoxTOTP
+        from pydantic import SecretStr
+        log.info("Auto-refreshing Upstox token via upstox-totp...")
+        upx = UpstoxTOTP(
+            username=UPSTOX_USERNAME,
+            pin_code=SecretStr(UPSTOX_PIN),
+            totp_secret=SecretStr(UPSTOX_TOTP_SECRET),
+            client_id=CLIENT_ID,
+            client_secret=SecretStr(CLIENT_SECRET),
+            redirect_uri=REDIRECT_URI,
         )
-        log.info(f"Auth step 1: {r1.status_code} {r1.text[:200]}")
-
-        if r1.status_code == 200:
-            auth_code = r1.json().get("data", {}).get("code")
-            if auth_code:
-                ok, err = exchange_code(auth_code)
-                if ok:
-                    log.info("Auto-refresh successful!")
-                    return True
-                log.error(f"Token exchange failed: {err}")
+        response = upx.app_token.get_access_token()
+        if response.success and response.data:
+            token = response.data.access_token
+            save_token({"access_token": token, "expires_at": date.today().isoformat()})
+            log.info(f"Auto-refresh successful! User: {response.data.user_name}")
+            return True
+        log.error(f"Auto-refresh failed: {response.error}")
+        return False
+    except ImportError:
+        log.error("upstox-totp not installed. Add to requirements.txt")
         return False
     except Exception as e:
         log.error(f"Auto-refresh error: {e}")
         return False
 
 def bg_auto_refresh():
-    """Disabled - Upstox does not support programmatic auto-login."""
-    pass
+    """Background thread: refresh token daily at 8:45am IST."""
+    time.sleep(60)  # Wait for startup
+    while True:
+        try:
+            now_ist = datetime.utcnow() + timedelta(hours=5, minutes=30)
+            token_expired = not get_token()
+            # Refresh at 8:45am IST or if token is expired
+            if token_expired or (now_ist.hour == 8 and now_ist.minute == 45):
+                log.info(f"Attempting auto-refresh at {now_ist.strftime('%H:%M')} IST")
+                auto_refresh_token()
+                time.sleep(120)  # avoid re-triggering
+            else:
+                time.sleep(30)
+        except Exception as e:
+            log.error(f"bg_auto_refresh error: {e}")
+            time.sleep(60)
 
 @app.route("/upstox/auto-refresh")
 def manual_auto_refresh():
@@ -1357,9 +1364,14 @@ def admin_subscriptions():
 
 # ── STARTUP ───────────────────────────────────────────────
 load_token()
+# Auto-refresh token at startup if not valid
+if not get_token():
+    log.info("No valid token at startup - attempting auto-refresh...")
+    threading.Thread(target=auto_refresh_token, daemon=True).start()
 threading.Thread(target=load_instrument_file, daemon=True).start()
 threading.Thread(target=bg_warm_cache, daemon=True).start()
 threading.Thread(target=bg_keep_alive, daemon=True).start()
+threading.Thread(target=bg_auto_refresh, daemon=True).start()
 log.info("=" * 50)
 log.info("WaveEdge API v5.1 — Upstox Edition")
 log.info(f"Token valid: {bool(get_token())}")
