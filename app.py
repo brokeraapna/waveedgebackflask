@@ -24,19 +24,19 @@ ADMIN_KEY     = os.environ.get("ADMIN_KEY",             "waveedge2024")
 SELF_URL      = os.environ.get("FRONTEND_URL",          "https://waveedgebackflask-2.onrender.com")
 TOKEN_FILE    = "upstox_token.json"
 POSTS_FILE    = "blog_posts.json"
+SUPABASE_URL  = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY  = os.environ.get("SUPABASE_KEY", "")
 
 # ── TOKEN ─────────────────────────────────────────────────
 _tok = {}
 
 def load_token():
     global _tok
-    # First try environment variable (survives Render restarts)
     env_token = os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip()
     if env_token:
         _tok = {"access_token": env_token, "expires_at": date.today().isoformat()}
         log.info("Token loaded from environment variable")
         return
-    # Fall back to file
     try:
         with open(TOKEN_FILE) as f:
             _tok = json.load(f)
@@ -48,13 +48,11 @@ def load_token():
 def save_token(data):
     global _tok
     _tok = data
-    # Save to file
     try:
         with open(TOKEN_FILE, 'w') as f:
             json.dump(data, f)
     except Exception as e:
         log.error(f"Token save error: {e}")
-    # Also update environment variable in memory
     if data.get('access_token'):
         os.environ["UPSTOX_ACCESS_TOKEN"] = data['access_token']
         log.info("Token saved to file and environment")
@@ -71,9 +69,6 @@ def get_token():
 def exchange_code(code):
     try:
         log.info(f"Exchanging code: {code[:8]}...")
-        log.info(f"Client ID: {CLIENT_ID}")
-        log.info(f"Secret set: {bool(CLIENT_SECRET)} len={len(CLIENT_SECRET)}")
-        log.info(f"Redirect URI: {REDIRECT_URI}")
         r = requests.post(
             "https://api.upstox.com/v2/login/authorization/token",
             data={
@@ -98,16 +93,14 @@ def exchange_code(code):
         log.error(f"Exchange error: {e}")
         return False, str(e)
 
-# ── INSTRUMENT MAP (Upstox keys) ──────────────────────────
+# ── INSTRUMENT MAP ────────────────────────────────────────
 INSTRUMENTS = {
-    # Indices
     "NIFTY":      "NSE_INDEX|Nifty 50",
     "NIFTY50":    "NSE_INDEX|Nifty 50",
     "BANKNIFTY":  "NSE_INDEX|Nifty Bank",
     "FINNIFTY":   "NSE_INDEX|Nifty Fin Service",
     "MIDCPNIFTY": "NSE_INDEX|NIFTY MID SELECT",
     "SENSEX":     "BSE_INDEX|SENSEX",
-    # Large Cap NSE
     "RELIANCE":   "NSE_EQ|INE002A01018",
     "TCS":        "NSE_EQ|INE467B01029",
     "HDFCBANK":   "NSE_EQ|INE040A01034",
@@ -160,8 +153,6 @@ INSTRUMENTS = {
     "SAIL":       "NSE_EQ|INE114A01011",
     "TATAPOWER":  "NSE_EQ|INE245A01021",
     "ADANIPORTS": "NSE_EQ|INE742F01042",
-
-    # ── NSE F&O STOCKS (200+) ─────────────────────────────────
     "AARTIIND":   "NSE_EQ|INE769A01020",
     "ABB":        "NSE_EQ|INE117A01022",
     "ABBOTINDIA": "NSE_EQ|INE358A01014",
@@ -169,21 +160,16 @@ INSTRUMENTS = {
     "ABFRL":      "NSE_EQ|INE647O01011",
     "ACC":        "NSE_EQ|INE012A01025",
     "ADANIGREEN": "NSE_EQ|INE364U01010",
-    "ADANIPORTS": "NSE_EQ|INE742F01042",
     "ADANIPOWER": "NSE_EQ|INE814H01011",
     "ATGL":       "NSE_EQ|INE399L01023",
     "ALKEM":      "NSE_EQ|INE540L01014",
     "AMBUJACEM":  "NSE_EQ|INE079A01024",
-    "APOLLOHOSP": "NSE_EQ|INE437A01024",
     "APOLLOTYRE": "NSE_EQ|INE438A01022",
     "AUROPHARMA": "NSE_EQ|INE406A01037",
     "AUBANK":     "NSE_EQ|INE949L01017",
     "BAJAJ-AUTO": "NSE_EQ|INE917I01010",
-    "BAJAJFINSV": "NSE_EQ|INE918I01026",
-    "BAJFINANCE": "NSE_EQ|INE296A01024",
     "BALKRISIND": "NSE_EQ|INE787D01026",
     "BANDHANBNK": "NSE_EQ|INE545U01014",
-    "BANKBARODA": "NSE_EQ|INE028A01039",
     "BATAINDIA":  "NSE_EQ|INE176A01028",
     "BEL":        "NSE_EQ|INE263A01024",
     "BERGEPAINT": "NSE_EQ|INE463A01038",
@@ -192,34 +178,25 @@ INSTRUMENTS = {
     "BHEL":       "NSE_EQ|INE257A01026",
     "BIOCON":     "NSE_EQ|INE376G01013",
     "BOSCHLTD":   "NSE_EQ|INE323A01026",
-    "BPCL":       "NSE_EQ|INE029A01011",
-    "BRITANNIA":  "NSE_EQ|INE216A01030",
     "BSOFT":      "NSE_EQ|INE386C01029",
     "CANBK":      "NSE_EQ|INE476A01014",
     "CANFINHOME": "NSE_EQ|INE477A01020",
     "CHAMBLFERT": "NSE_EQ|INE085A01013",
     "CHOLAFIN":   "NSE_EQ|INE121A01024",
-    "CIPLA":      "NSE_EQ|INE059A01026",
-    "COALINDIA":  "NSE_EQ|INE522F01014",
     "COFORGE":    "NSE_EQ|INE591G01017",
     "COLPAL":     "NSE_EQ|INE259A01022",
     "CONCOR":     "NSE_EQ|INE111A01025",
     "COROMANDEL": "NSE_EQ|INE169A01031",
-    "CROMPTON":   "NSE_EQ|INE kronos0A01027",
     "CUMMINSIND": "NSE_EQ|INE298A01020",
     "DABUR":      "NSE_EQ|INE016A01026",
     "DALBHARAT":  "NSE_EQ|INE495G01014",
     "DEEPAKNTR":  "NSE_EQ|INE288B01029",
     "DELTACORP":  "NSE_EQ|INE482A01020",
-    "DIVISLAB":   "NSE_EQ|INE361B01024",
     "DIXON":      "NSE_EQ|INE935N01020",
     "DLF":        "NSE_EQ|INE271C01023",
-    "DRREDDY":    "NSE_EQ|INE089A01023",
-    "EICHERMOT":  "NSE_EQ|INE066A01021",
     "ESCORTS":    "NSE_EQ|INE042A01014",
     "EXIDEIND":   "NSE_EQ|INE302A01020",
     "FEDERALBNK": "NSE_EQ|INE171A01029",
-    "FINNIFTY":   "NSE_INDEX|Nifty Fin Service",
     "FORTIS":     "NSE_EQ|INE061F01013",
     "GAIL":       "NSE_EQ|INE129A01019",
     "GLENMARK":   "NSE_EQ|INE935A01035",
@@ -228,22 +205,15 @@ INSTRUMENTS = {
     "GODREJCP":   "NSE_EQ|INE102D01028",
     "GODREJPROP": "NSE_EQ|INE484J01027",
     "GRANULES":   "NSE_EQ|INE101D01020",
-    "GRASIM":     "NSE_EQ|INE047A01021",
     "GUJGASLTD":  "NSE_EQ|INE844O01030",
     "HAL":        "NSE_EQ|INE066F01012",
     "HAVELLS":    "NSE_EQ|INE176B01034",
-    "HCLTECH":    "NSE_EQ|INE860A01027",
     "HDFCAMC":    "NSE_EQ|INE127D01025",
-    "HDFCBANK":   "NSE_EQ|INE040A01034",
-    "HDFCLIFE":   "NSE_EQ|INE795G01014",
-    "HEROMOTOCO": "NSE_EQ|INE158A01026",
     "HFCL":       "NSE_EQ|INE548A01028",
     "HINDALCO":   "NSE_EQ|INE038A01020",
     "HINDCOPPER": "NSE_EQ|INE531E01026",
     "HINDPETRO":  "NSE_EQ|INE094A01015",
-    "HINDUNILVR": "NSE_EQ|INE030A01027",
     "HONASA":     "NSE_EQ|INE343K01035",
-    "ICICIBANK":  "NSE_EQ|INE090A01021",
     "ICICIGI":    "NSE_EQ|INE765G01017",
     "ICICIPRULI": "NSE_EQ|INE726G01019",
     "IDEA":       "NSE_EQ|INE669E01016",
@@ -256,39 +226,30 @@ INSTRUMENTS = {
     "INDIAMART":  "NSE_EQ|INE493T01026",
     "INDIANB":    "NSE_EQ|INE562A01011",
     "INDIGO":     "NSE_EQ|INE646L01027",
-    "INDUSINDBK": "NSE_EQ|INE095A01012",
     "INDUSTOWER": "NSE_EQ|INE121J01017",
-    "INFY":       "NSE_EQ|INE009A01021",
     "INTELLECT":  "NSE_EQ|INE306R01017",
     "IOC":        "NSE_EQ|INE242A01010",
     "IPCALAB":    "NSE_EQ|INE571A01020",
     "IRCTC":      "NSE_EQ|INE335Y01020",
     "IRFC":       "NSE_EQ|INE053F01010",
-    "ITC":        "NSE_EQ|INE154A01025",
     "JINDALSTEL": "NSE_EQ|INE749A01030",
     "JIOFIN":     "NSE_EQ|INE758T01015",
-    "JSL":        "NSE_EQ|INE 205A01025",
     "JSWENERGY":  "NSE_EQ|INE121E01018",
-    "JSWSTEEL":   "NSE_EQ|INE019A01038",
     "JUBLFOOD":   "NSE_EQ|INE797F01020",
     "KALYANKJIL": "NSE_EQ|INE303R01014",
     "KEI":        "NSE_EQ|INE878B01027",
-    "KOTAKBANK":  "NSE_EQ|INE237A01028",
     "KPITTECH":   "NSE_EQ|INE618Z01016",
     "LALPATHLAB": "NSE_EQ|INE093I01010",
     "LAURUSLABS":  "NSE_EQ|INE947Q01028",
     "LICHSGFIN":  "NSE_EQ|INE115A01026",
     "LICI":       "NSE_EQ|INE0J1Y01017",
     "LINDEINDIA": "NSE_EQ|INE663A01017",
-    "LT":         "NSE_EQ|INE018A01030",
     "LTIM":       "NSE_EQ|INE214T01019",
     "LTTS":       "NSE_EQ|INE010V01017",
     "LUPIN":      "NSE_EQ|INE326A01037",
-    "M&M":        "NSE_EQ|INE101A01026",
     "M&MFIN":     "NSE_EQ|INE774D01024",
     "MANAPPURAM": "NSE_EQ|INE522D01027",
     "MARICO":     "NSE_EQ|INE196A01026",
-    "MARUTI":     "NSE_EQ|INE585B01010",
     "MCXINDIA":   "NSE_EQ|INE745G01035",
     "METROPOLIS": "NSE_EQ|INE112L01020",
     "MFSL":       "NSE_EQ|INE582A01016",
@@ -301,73 +262,50 @@ INSTRUMENTS = {
     "NATIONALUM": "NSE_EQ|INE139A01034",
     "NAUKRI":     "NSE_EQ|INE663F01024",
     "NAVINFLUOR": "NSE_EQ|INE048G01026",
-    "NESTLEIND":  "NSE_EQ|INE239A01016",
     "NHPC":       "NSE_EQ|INE848E01016",
     "NMDC":       "NSE_EQ|INE584A01023",
-    "NTPC":       "NSE_EQ|INE733E01010",
     "NYKAA":      "NSE_EQ|INE388Y01029",
     "OBEROIRLTY": "NSE_EQ|INE093I01010",
     "OFSS":       "NSE_EQ|INE881D01027",
     "OIL":        "NSE_EQ|INE274J01014",
-    "ONGC":       "NSE_EQ|INE213A01029",
     "PAGEIND":    "NSE_EQ|INE761H01022",
     "PATANJALI":  "NSE_EQ|INE623Z01017",
     "PEL":        "NSE_EQ|INE140A01024",
     "PERSISTENT": "NSE_EQ|INE262H01021",
     "PETRONET":   "NSE_EQ|INE347G01014",
     "PFC":        "NSE_EQ|INE134E01011",
-    "PIDILITIND": "NSE_EQ|INE318A01026",
     "PIIND":      "NSE_EQ|INE603J01030",
-    "PNB":        "NSE_EQ|INE160A01022",
     "POLICYBZR":  "NSE_EQ|INE417T01026",
     "POLYCAB":    "NSE_EQ|INE455K01017",
-    "POWERGRID":  "NSE_EQ|INE752E01010",
     "PVRINOX":    "NSE_EQ|INE191H01036",
     "RAMCOCEM":   "NSE_EQ|INE331A01037",
     "RBLBANK":    "NSE_EQ|INE976G01028",
     "RECLTD":     "NSE_EQ|INE020B01018",
-    "RELIANCE":   "NSE_EQ|INE002A01018",
-    "SAIL":       "NSE_EQ|INE114A01011",
     "SBICARD":    "NSE_EQ|INE018E01016",
-    "SBILIFE":    "NSE_EQ|INE123W01016",
-    "SBIN":       "NSE_EQ|INE062A01020",
     "SHREECEM":   "NSE_EQ|INE070A01015",
     "SHRIRAMFIN": "NSE_EQ|INE721A01013",
-    "SIEMENS":    "NSE_EQ|INE003A01024",
     "SOBHA":      "NSE_EQ|INE671H01015",
     "SOLARINDS":  "NSE_EQ|INE343H01029",
     "SRF":        "NSE_EQ|INE647A01010",
     "SUNTV":      "NSE_EQ|INE424H01027",
-    "SUNPHARMA":  "NSE_EQ|INE044A01036",
     "SUPREMEIND": "NSE_EQ|INE195A01028",
     "SYNGENE":    "NSE_EQ|INE398R01022",
     "TATACHEM":   "NSE_EQ|INE092A01019",
     "TATACOMM":   "NSE_EQ|INE151A01013",
-    "TATACONSUM": "NSE_EQ|INE192A01025",
     "TATAELXSI":  "NSE_EQ|INE670A01012",
-    "TATAMOTORS": "NSE_EQ|INE155A01022",
-    "TATAPOWER":  "NSE_EQ|INE245A01021",
-    "TATASTEEL":  "NSE_EQ|INE081A01020",
-    "TCS":        "NSE_EQ|INE467B01029",
-    "TECHM":      "NSE_EQ|INE669C01036",
-    "TITAN":      "NSE_EQ|INE280A01028",
     "TORNTPHARM": "NSE_EQ|INE685A01028",
     "TORNTPOWER": "NSE_EQ|INE813H01021",
     "TRENT":      "NSE_EQ|INE849A01020",
     "TVSMOTOR":   "NSE_EQ|INE494B01023",
     "UBL":        "NSE_EQ|INE686F01025",
     "UJJIVAN":    "NSE_EQ|INE334L01012",
-    "ULTRACEMCO": "NSE_EQ|INE481G01011",
     "UNIONBANK":  "NSE_EQ|INE692A01016",
     "UPL":        "NSE_EQ|INE628A01036",
-    "VEDL":       "NSE_EQ|INE205A01025",
     "VOLTAS":     "NSE_EQ|INE226A01021",
     "WHIRLPOOL":  "NSE_EQ|INE716A01013",
-    "WIPRO":      "NSE_EQ|INE075A01022",
     "YESBANK":    "NSE_EQ|INE528G01035",
     "ZEEL":       "NSE_EQ|INE256A01028",
     "ZOMATO":     "NSE_EQ|INE758T01015",
-    "NYKAA":      "NSE_EQ|INE388Y01029",
     "SUZLON":     "NSE_EQ|INE040H01021",
     "ZYDUSLIFE":  "NSE_EQ|INE010B01027",
 }
@@ -389,8 +327,6 @@ DEFAULT_SCRIPS = [
 ]
 
 # ── CACHE ─────────────────────────────────────────────────
-
-# DYNAMIC INSTRUMENT LOOKUP
 _instrument_map    = {}
 _instrument_loaded = False
 INSTRUMENT_FILE    = "nse_instruments.json"
@@ -442,7 +378,7 @@ def resolve_instrument(ticker):
 
 _cache    = {}
 _cache_ts = {}
-CACHE_TTL = 300  # 5 min
+CACHE_TTL = 300
 
 # ── UPSTOX FETCH ──────────────────────────────────────────
 def fetch_candles(instrument_key, interval, days):
@@ -675,7 +611,7 @@ def bg_warm_cache():
                 except: pass
             log.info("Cache warm done.")
         else:
-            log.warning("No Upstox token — skipping cache warm. Please reconnect.")
+            log.warning("No Upstox token — skipping cache warm.")
         time.sleep(600)
 
 def bg_keep_alive():
@@ -700,24 +636,10 @@ def index():
         f"&redirect_uri={REDIRECT_URI}&scope=historical_data"
     )
     return jsonify({
-        "name":        "WaveEdge API — Upstox Edition",
-        "version":     "5.1",
-        "connected":   bool(token),
-        "login_url":   login_url if not token else "already_connected",
-        "endpoints": {
-            "/health":           "Status check",
-            "/upstox/login":     "Redirect to Upstox login",
-            "/upstox/callback":  "OAuth callback (auto)",
-            "/upstox/status":    "Token status",
-            "/macd/<ticker>":    "MACD signals for one ticker",
-            "/macd/batch":       "MACD for multiple tickers",
-            "/scan":             "Elliott Wave scanner results",
-            "/scan/<ticker>":    "Scan single ticker",
-            "/symbols":          "List all mapped symbols",
-            "/blog":             "Blog posts",
-            "/fii":              "FII/DII participant OI data",
-            "/pcr":              "Nifty Put/Call Ratio",
-        }
+        "name":      "WaveEdge API — Upstox Edition",
+        "version":   "5.2",
+        "connected": bool(token),
+        "login_url": login_url if not token else "already_connected",
     })
 
 @app.route("/health")
@@ -748,7 +670,7 @@ def manual_token():
     <style>*{box-sizing:border-box;margin:0;padding:0}body{background:#020c14;color:#dff0f8;font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}.box{background:#061525;border:1px solid #00e5ff;border-radius:14px;padding:36px;width:100%;max-width:500px}h2{color:#00e5ff;margin-bottom:8px}p{color:#4d8099;font-size:13px;margin-bottom:20px;line-height:1.6}label{display:block;font-size:11px;color:#4d8099;letter-spacing:1px;margin-bottom:5px;text-transform:uppercase}input,textarea{width:100%;background:#0a1f30;border:1px solid #173348;color:#dff0f8;padding:11px;border-radius:7px;font-size:13px;margin-bottom:14px;font-family:monospace}button{width:100%;background:linear-gradient(135deg,#00e5ff,#00ff88);color:#000;border:none;padding:13px;border-radius:7px;font-weight:700;font-size:15px;cursor:pointer}#msg{margin-top:12px;text-align:center;font-size:13px}</style>
     </head><body><div class=box>
     <h2>&#9889; Set Upstox Access Token</h2>
-    <p>Go to <b>account.upstox.com/developer/apps</b> → your app → click <b>Generate</b> next to Access Token → copy and paste below.</p>
+    <p>Paste your Upstox access token below.</p>
     <label>Access Token</label>
     <textarea id=tok rows=4 placeholder="Paste your Upstox access token here..."></textarea>
     <label>Admin Key</label>
@@ -763,7 +685,7 @@ def manual_token():
       if(!tok){document.getElementById('msg').innerHTML='<span style=color:#ff1744>Paste your token first</span>';return;}
       var r=await fetch('/upstox/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access_token:tok,admin_key:key})});
       var d=await r.json();
-      if(d.success){document.getElementById('msg').innerHTML='<span style=color:#00ff88>&#10004; Token saved! <a href=/ style=color:#00e5ff>Go to API</a></span>';}
+      if(d.success){document.getElementById('msg').innerHTML='<span style=color:#00ff88>&#10004; Token saved!</span>';}
       else{document.getElementById('msg').innerHTML='<span style=color:#ff1744>Error: '+d.error+'</span>';}
     }
     </script></body></html>"""
@@ -781,31 +703,14 @@ def upstox_login():
 def upstox_callback():
     code  = request.args.get("code")
     error = request.args.get("error")
-
     if error:
         return _html_page("❌ Login Error", f"Error: {error}", "red", "/upstox/login", "Try Again"), 400
     if not code:
-        return _html_page("❌ No Code", "No auth code received from Upstox.", "red", "/upstox/login", "Try Again"), 400
-
+        return _html_page("❌ No Code", "No auth code received.", "red", "/upstox/login", "Try Again"), 400
     ok, err = exchange_code(code)
     if ok:
-        return _html_page(
-            "✅ Upstox Connected!",
-            "Real-time NSE data is now live on WaveEdge.<br>Token refreshes daily — click Reconnect each morning.",
-            "green", "https://waveedge.in", "Go to WaveEdge →"
-        )
-    debug_info = f"""
-    Error: {err}<br><br>
-    Client ID: {CLIENT_ID[:8]}...{CLIENT_ID[-4:]}<br>
-    Secret set: {'YES (' + CLIENT_SECRET[:3] + '...)' if CLIENT_SECRET else 'NO - MISSING!'}<br>
-    Redirect URI: {REDIRECT_URI}<br>
-    Code received: {code[:8]}...<br>
-    """
-    return _html_page(
-        "❌ Token Exchange Failed",
-        f"Upstox rejected the token request.<br><br><small style='text-align:left;display:block;background:#0a1f30;padding:12px;border-radius:6px;font-family:monospace;font-size:11px;line-height:1.8'>{debug_info}</small>",
-        "red", "/upstox/login", "Try Again"
-    ), 400
+        return _html_page("✅ Upstox Connected!", "Real-time NSE data is now live.", "green", "https://waveedge.in", "Go to WaveEdge →")
+    return _html_page("❌ Token Exchange Failed", f"Error: {err}", "red", "/upstox/login", "Try Again"), 400
 
 @app.route("/upstox/status")
 def upstox_status():
@@ -873,13 +778,10 @@ SCAN_CACHE_TTL  = 300
 def scan_all():
     global _scan_cache, _scan_cache_ts
     force = request.args.get("force", "false").lower() == "true"
-
     if not force and _scan_cache and (time.time() - _scan_cache_ts) < SCAN_CACHE_TTL:
         return jsonify({"count": len(_scan_cache), "cached": True, "results": _scan_cache})
-
     if not get_token():
-        return jsonify({"error": "upstox_not_connected", "message": "Please reconnect Upstox at /upstox/login"}), 401
-
+        return jsonify({"error": "upstox_not_connected"}), 401
     results = []
     for ticker in DEFAULT_SCRIPS:
         try:
@@ -888,16 +790,9 @@ def scan_all():
             time.sleep(0.8)
         except Exception as e:
             log.warning(f"Scan error {ticker}: {e}")
-
     _scan_cache    = results
     _scan_cache_ts = time.time()
-
-    return jsonify({
-        "count":     len(results),
-        "cached":    False,
-        "timestamp": datetime.utcnow().isoformat(),
-        "results":   results,
-    })
+    return jsonify({"count": len(results), "cached": False, "timestamp": datetime.utcnow().isoformat(), "results": results})
 
 @app.route("/scan/<ticker>")
 def scan_single(ticker):
@@ -932,27 +827,15 @@ def blog_post():
 # ── SYMBOLS ───────────────────────────────────────────────
 @app.route("/symbols")
 def symbols():
-    return jsonify({
-        "count":   len(INSTRUMENTS),
-        "symbols": list(INSTRUMENTS.keys()),
-    })
+    return jsonify({"count": len(INSTRUMENTS), "symbols": list(INSTRUMENTS.keys())})
 
 # ── FII / DII DATA ────────────────────────────────────────
 @app.route("/fii")
 def fii_data():
-    """
-    FII/DII participant OI data.
-    Source 1: NSE public archive CSV (published ~6pm daily, no auth needed).
-    Source 2: Upstox for Nifty spot price.
-    Falls back to spot-only if CSV not yet published (before 6pm).
-    """
     result = {
-        "data": [],
-        "spotPrice": 0, "spotChange": 0, "spotPct": 0,
+        "data": [], "spotPrice": 0, "spotChange": 0, "spotPct": 0,
         "pcr": 0, "source": "unknown", "dataDate": ""
     }
-
-    # 1. Nifty spot from Upstox
     token = get_token()
     if token:
         try:
@@ -969,12 +852,7 @@ def fii_data():
         except Exception as e:
             log.warning(f"Upstox spot error: {e}")
 
-    # 2. Participant OI from NSE public archive CSV
-    csv_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Accept": "text/csv,*/*",
-    }
-
+    csv_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "text/csv,*/*"}
     participant_data = []
     for days_back in range(0, 8):
         check_date = datetime.now() - timedelta(days=days_back)
@@ -984,7 +862,6 @@ def fii_data():
         year_str = check_date.strftime("%Y")
         mon_str  = check_date.strftime("%b").upper()
         csv_url  = f"https://archives.nseindia.com/content/historical/DERIVATIVES/{year_str}/{mon_str}/fao_participant_oi_{date_str}.csv"
-
         try:
             r = requests.get(csv_url, headers=csv_headers, timeout=10)
             if r.status_code == 200 and "Client" in r.text:
@@ -995,7 +872,6 @@ def fii_data():
                     participant_data = rows
                     result["dataDate"] = check_date.strftime("%d-%b-%Y")
                     result["source"]   = "nse_csv"
-                    log.info(f"FII CSV loaded for {result['dataDate']}")
                     break
         except Exception as e:
             log.warning(f"CSV fetch error for {date_str}: {e}")
@@ -1007,61 +883,41 @@ def fii_data():
             ct = row.get("Client Type", "").strip()
             if not ct or ct.lower() == "total":
                 continue
-            mapped.append({
-                "clientType":          ct,
-                "instrumentType":      "Index Futures",
-                "longQuantity":        _safe_int(row.get("Future Index Long", 0)),
-                "shortQuantity":       _safe_int(row.get("Future Index Short", 0)),
-                "changeLongQuantity":  _safe_int(row.get("Future Index Long Change", 0)),
-                "changeShortQuantity": _safe_int(row.get("Future Index Short Change", 0)),
-            })
-            mapped.append({
-                "clientType":          ct,
-                "instrumentType":      "Index Calls",
-                "longQuantity":        _safe_int(row.get("Option Index Call Long", 0)),
-                "shortQuantity":       _safe_int(row.get("Option Index Call Short", 0)),
-                "changeLongQuantity":  _safe_int(row.get("Option Index Call Long Change", 0)),
-                "changeShortQuantity": _safe_int(row.get("Option Index Call Short Change", 0)),
-            })
-            mapped.append({
-                "clientType":          ct,
-                "instrumentType":      "Index Puts",
-                "longQuantity":        _safe_int(row.get("Option Index Put Long", 0)),
-                "shortQuantity":       _safe_int(row.get("Option Index Put Short", 0)),
-                "changeLongQuantity":  _safe_int(row.get("Option Index Put Long Change", 0)),
-                "changeShortQuantity": _safe_int(row.get("Option Index Put Short Change", 0)),
-            })
-            mapped.append({
-                "clientType":          ct,
-                "instrumentType":      "Stock Futures",
-                "longQuantity":        _safe_int(row.get("Future Stock Long", 0)),
-                "shortQuantity":       _safe_int(row.get("Future Stock Short", 0)),
-                "changeLongQuantity":  _safe_int(row.get("Future Stock Long Change", 0)),
-                "changeShortQuantity": _safe_int(row.get("Future Stock Short Change", 0)),
-            })
-
+            mapped.append({"clientType": ct, "instrumentType": "Index Futures",
+                "longQuantity": _safe_int(row.get("Future Index Long", 0)),
+                "shortQuantity": _safe_int(row.get("Future Index Short", 0)),
+                "changeLongQuantity": _safe_int(row.get("Future Index Long Change", 0)),
+                "changeShortQuantity": _safe_int(row.get("Future Index Short Change", 0))})
+            mapped.append({"clientType": ct, "instrumentType": "Index Calls",
+                "longQuantity": _safe_int(row.get("Option Index Call Long", 0)),
+                "shortQuantity": _safe_int(row.get("Option Index Call Short", 0)),
+                "changeLongQuantity": _safe_int(row.get("Option Index Call Long Change", 0)),
+                "changeShortQuantity": _safe_int(row.get("Option Index Call Short Change", 0))})
+            mapped.append({"clientType": ct, "instrumentType": "Index Puts",
+                "longQuantity": _safe_int(row.get("Option Index Put Long", 0)),
+                "shortQuantity": _safe_int(row.get("Option Index Put Short", 0)),
+                "changeLongQuantity": _safe_int(row.get("Option Index Put Long Change", 0)),
+                "changeShortQuantity": _safe_int(row.get("Option Index Put Short Change", 0))})
+            mapped.append({"clientType": ct, "instrumentType": "Stock Futures",
+                "longQuantity": _safe_int(row.get("Future Stock Long", 0)),
+                "shortQuantity": _safe_int(row.get("Future Stock Short", 0)),
+                "changeLongQuantity": _safe_int(row.get("Future Stock Long Change", 0)),
+                "changeShortQuantity": _safe_int(row.get("Future Stock Short Change", 0))})
         result["data"] = mapped
         return jsonify(result)
 
-    # All CSV attempts failed
     if result["spotPrice"]:
         result["spotOnly"] = True
-        result["error"] = "NSE CSV unavailable — may be holiday or published after 6pm"
+        result["error"] = "NSE CSV unavailable"
         return jsonify(result)
 
     return jsonify({"error": "All data sources failed"}), 503
 
-
 @app.route("/pcr")
 def pcr_data():
-    """Fetch Nifty PCR from NSE option chain."""
     try:
         session = requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "*/*",
-            "Accept-Language": "en-US,en;q=0.9",
-        })
+        session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Accept": "*/*"})
         session.get("https://www.nseindia.com", timeout=8)
         r = session.get(
             "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY",
@@ -1078,26 +934,21 @@ def pcr_data():
     except Exception as e:
         return jsonify({"error": str(e)}), 503
 
-
-
 # ── TOTP AUTO TOKEN REFRESH ───────────────────────────────
-UPSTOX_USERNAME  = os.environ.get("UPSTOX_USERNAME", "")
-UPSTOX_PIN       = os.environ.get("UPSTOX_PIN", "")
+UPSTOX_USERNAME    = os.environ.get("UPSTOX_USERNAME", "")
+UPSTOX_PIN         = os.environ.get("UPSTOX_PIN", "")
 UPSTOX_TOTP_SECRET = os.environ.get("UPSTOX_TOTP_SECRET", "")
 
 def generate_totp():
-    """Generate current TOTP code from secret (supports Base32 and Base64)."""
     try:
         import hmac, hashlib, base64, struct
         secret = UPSTOX_TOTP_SECRET.strip()
-        # Try Base32 first (standard TOTP)
         try:
             b32 = secret.upper().replace(" ", "")
             missing = len(b32) % 8
             if missing: b32 += '=' * (8 - missing)
             key = base64.b32decode(b32)
         except Exception:
-            # Fall back to Base64 (Upstox format)
             padded = secret + '=' * (4 - len(secret) % 4)
             key = base64.b64decode(padded)
         t = int(time.time()) // 30
@@ -1111,52 +962,30 @@ def generate_totp():
         return None
 
 def auto_refresh_token():
-    """Auto-refresh Upstox token using pyotp + Upstox OAuth flow."""
     if not all([UPSTOX_USERNAME, UPSTOX_PIN, UPSTOX_TOTP_SECRET, CLIENT_ID, CLIENT_SECRET]):
-        log.warning("Auto-refresh: missing credentials in environment")
+        log.warning("Auto-refresh: missing credentials")
         return False
     try:
         import pyotp
-        log.info("Auto-refreshing Upstox token via pyotp...")
-
-        # Generate TOTP code
-        # Handle both base32 and base64 secrets
         secret = UPSTOX_TOTP_SECRET.strip()
         try:
             totp_code = pyotp.TOTP(secret).now()
         except Exception:
-            # Try base64 decode then base32 encode
             import base64
             padded = secret + '=' * (4 - len(secret) % 4)
             raw = base64.b64decode(padded)
             b32_secret = base64.b32encode(raw).decode()
             totp_code = pyotp.TOTP(b32_secret).now()
 
-        log.info(f"Generated TOTP: {totp_code}")
-
-        # Step 1: Login to get auth code via Upstox API
         session = requests.Session()
-        session.headers.update({
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json",
-        })
-
-        # Upstox login endpoint
+        session.headers.update({"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
         login_r = session.post(
             "https://api.upstox.com/v2/login/authorization/token",
-            data={
-                "client_id":     CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "grant_type":    "password",
-                "username":      UPSTOX_USERNAME,
-                "password":      UPSTOX_PIN,
-                "otp":           totp_code,
-                "redirect_uri":  REDIRECT_URI,
-            },
+            data={"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET,
+                  "grant_type": "password", "username": UPSTOX_USERNAME,
+                  "password": UPSTOX_PIN, "otp": totp_code, "redirect_uri": REDIRECT_URI},
             timeout=20
         )
-        log.info(f"Login response: {login_r.status_code} {login_r.text[:300]}")
-
         if login_r.status_code == 200:
             data = login_r.json()
             token = data.get("access_token") or data.get("data", {}).get("access_token")
@@ -1164,27 +993,21 @@ def auto_refresh_token():
                 save_token({"access_token": token, "expires_at": date.today().isoformat()})
                 log.info("Auto-refresh successful!")
                 return True
-
-        # Try alternate endpoint
-        log.warning("Standard login failed, trying alternate flow...")
         return False
-
     except Exception as e:
         log.error(f"Auto-refresh error: {e}")
         return False
 
 def bg_auto_refresh():
-    """Background thread: refresh token daily at 8:45am IST."""
-    time.sleep(60)  # Wait for startup
+    time.sleep(60)
     while True:
         try:
             now_ist = datetime.utcnow() + timedelta(hours=5, minutes=30)
             token_expired = not get_token()
-            # Refresh at 8:45am IST or if token is expired
             if token_expired or (now_ist.hour == 8 and now_ist.minute == 45):
                 log.info(f"Attempting auto-refresh at {now_ist.strftime('%H:%M')} IST")
                 auto_refresh_token()
-                time.sleep(120)  # avoid re-triggering
+                time.sleep(120)
             else:
                 time.sleep(30)
         except Exception as e:
@@ -1193,25 +1016,50 @@ def bg_auto_refresh():
 
 @app.route("/upstox/auto-refresh")
 def manual_auto_refresh():
-    """Manually trigger token auto-refresh."""
     if not all([UPSTOX_USERNAME, UPSTOX_PIN, UPSTOX_TOTP_SECRET]):
-        return jsonify({"error": "TOTP credentials not configured in environment"}), 400
+        return jsonify({"error": "TOTP credentials not configured"}), 400
     ok = auto_refresh_token()
     return jsonify({"success": ok, "token_valid": bool(get_token())})
 
-
-# ── WAVE COUNTS ───────────────────────────────────────────
-WAVECOUNTS_FILE = "wavecounts.json"
+# ── WAVE COUNTS (Supabase) ────────────────────────────────
+def sb_headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
 
 def load_wavecounts():
     try:
-        with open(WAVECOUNTS_FILE) as f: return json.load(f)
-    except: return []
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/wavecounts?order=id.desc&limit=60",
+            headers=sb_headers(), timeout=10
+        )
+        if r.status_code == 200:
+            rows = r.json()
+            return [row["data"] for row in rows]
+    except Exception as e:
+        log.error(f"Supabase load error: {e}")
+    return []
 
-def save_wavecounts(posts):
+def save_wavecount_single(post):
     try:
-        with open(WAVECOUNTS_FILE, 'w') as f: json.dump(posts[:60], f, indent=2)
-    except: pass
+        today = datetime.utcnow().date().isoformat()
+        requests.delete(
+            f"{SUPABASE_URL}/rest/v1/wavecounts?created_at=gte.{today}",
+            headers=sb_headers(), timeout=10
+        )
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/wavecounts",
+            headers=sb_headers(),
+            json={"id": post["id"], "data": post},
+            timeout=10
+        )
+        return r.status_code in [200, 201]
+    except Exception as e:
+        log.error(f"Supabase save error: {e}")
+        return False
 
 @app.route("/wavecounts/latest")
 def wavecounts_latest():
@@ -1231,24 +1079,24 @@ def wavecounts_post():
     if request.headers.get("X-Admin-Key") != ADMIN_KEY:
         return jsonify({"error": "unauthorized"}), 401
     data = request.get_json() or {}
-    posts = load_wavecounts()
     data["id"]   = int(time.time() * 1000)
     data["date"] = datetime.utcnow().isoformat()
-    # Replace today's post if already exists
     today = datetime.utcnow().date().isoformat()
-    posts = [p for p in posts if not p.get("date","").startswith(today)]
-    posts.insert(0, data)
-    save_wavecounts(posts)
-    log.info(f"Wave count posted for {today}")
-    return jsonify({"success": True, "id": data["id"]})
+    ok = save_wavecount_single(data)
+    log.info(f"Wave count posted for {today}, success={ok}")
+    return jsonify({"success": ok, "id": data["id"]})
 
 @app.route("/wavecounts/delete/<int:post_id>", methods=["DELETE"])
 def wavecounts_delete(post_id):
     if request.headers.get("X-Admin-Key") != ADMIN_KEY:
         return jsonify({"error": "unauthorized"}), 401
-    posts = load_wavecounts()
-    posts = [p for p in posts if p.get("id") != post_id]
-    save_wavecounts(posts)
+    try:
+        requests.delete(
+            f"{SUPABASE_URL}/rest/v1/wavecounts?id=eq.{post_id}",
+            headers=sb_headers(), timeout=10
+        )
+    except Exception as e:
+        log.error(f"Supabase delete error: {e}")
     return jsonify({"success": True})
 
 # ── RAZORPAY SUBSCRIPTION ─────────────────────────────────
@@ -1267,23 +1115,19 @@ def save_subscriptions(data):
     except: pass
 
 def generate_access_code():
-    import hashlib, secrets
+    import secrets
     return "WE-" + secrets.token_hex(6).upper()
 
 @app.route("/subscription/verify", methods=["POST"])
 def verify_subscription():
-    """Verify Razorpay payment and generate access code."""
     data = request.get_json() or {}
-    payment_id  = data.get("razorpay_payment_id", "")
-    order_id    = data.get("razorpay_order_id", "")
-    signature   = data.get("razorpay_signature", "")
-    plan        = data.get("plan", "professional")
-    email       = data.get("email", "")
-
+    payment_id = data.get("razorpay_payment_id", "")
+    order_id   = data.get("razorpay_order_id", "")
+    signature  = data.get("razorpay_signature", "")
+    plan       = data.get("plan", "professional")
+    email      = data.get("email", "")
     if not all([payment_id, order_id, signature]):
         return jsonify({"error": "Missing payment details"}), 400
-
-    # Verify signature
     try:
         import hmac, hashlib
         msg = f"{order_id}|{payment_id}".encode()
@@ -1292,53 +1136,38 @@ def verify_subscription():
             return jsonify({"error": "Invalid signature"}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 400
-
-    # Generate access code
     code = generate_access_code()
     subs = load_subscriptions()
     subs[code] = {
-        "payment_id": payment_id,
-        "order_id":   order_id,
-        "plan":       plan,
-        "email":      email,
-        "created_at": datetime.utcnow().isoformat(),
-        "expires_at": (datetime.utcnow() + timedelta(days=30)).isoformat(),
-        "active":     True
+        "payment_id": payment_id, "order_id": order_id, "plan": plan,
+        "email": email, "created_at": datetime.utcnow().isoformat(),
+        "expires_at": (datetime.utcnow() + timedelta(days=30)).isoformat(), "active": True
     }
     save_subscriptions(subs)
-    log.info(f"New subscription: {code} plan={plan} email={email}")
     return jsonify({"success": True, "access_code": code, "plan": plan})
 
 @app.route("/subscription/check/<code>")
 def check_subscription(code):
-    """Check if access code is valid."""
     subs = load_subscriptions()
     sub  = subs.get(code.upper())
     if not sub:
         return jsonify({"valid": False, "error": "Invalid code"}), 404
     if not sub.get("active"):
         return jsonify({"valid": False, "error": "Subscription inactive"}), 403
-    # Check expiry
     try:
         exp = datetime.fromisoformat(sub["expires_at"])
         if datetime.utcnow() > exp:
             return jsonify({"valid": False, "error": "Subscription expired"}), 403
     except: pass
-    return jsonify({
-        "valid":      True,
-        "plan":       sub.get("plan"),
-        "expires_at": sub.get("expires_at"),
-        "email":      sub.get("email", "")
-    })
+    return jsonify({"valid": True, "plan": sub.get("plan"), "expires_at": sub.get("expires_at"), "email": sub.get("email", "")})
 
 @app.route("/subscription/create-order", methods=["POST"])
 def create_order():
-    """Create Razorpay order."""
     if not RAZORPAY_KEY or not RAZORPAY_SECRET:
         return jsonify({"error": "Razorpay not configured"}), 400
     data   = request.get_json() or {}
     plan   = data.get("plan", "professional")
-    prices = {"starter": 49900, "professional": 99900, "institutional": 199900}  # paise
+    prices = {"starter": 49900, "professional": 99900, "institutional": 199900}
     amount = prices.get(plan, 99900)
     try:
         r = requests.post(
@@ -1351,43 +1180,30 @@ def create_order():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 @app.route("/subscription/create-code", methods=["POST"])
 def create_code():
-    """Admin: manually create access code for a customer."""
-    data    = request.get_json() or {}
-    key     = data.get("admin_key", "")
+    data   = request.get_json() or {}
+    key    = data.get("admin_key", "")
     if key != ADMIN_KEY:
         return jsonify({"error": "unauthorized"}), 401
-    email   = data.get("email", "").strip()
-    plan    = data.get("plan", "professional")
-    payref  = data.get("payment_ref", "manual")
+    email  = data.get("email", "").strip()
+    plan   = data.get("plan", "professional")
+    payref = data.get("payment_ref", "manual")
     if not email:
         return jsonify({"error": "email required"}), 400
-    days    = 30
-    code    = generate_access_code()
-    subs    = load_subscriptions()
+    code = generate_access_code()
+    subs = load_subscriptions()
     subs[code] = {
-        "payment_id":  payref,
-        "order_id":    f"manual-{int(time.time())}",
-        "plan":        plan,
-        "email":       email,
-        "created_at":  datetime.utcnow().isoformat(),
-        "expires_at":  (datetime.utcnow() + timedelta(days=days)).isoformat(),
-        "active":      True
+        "payment_id": payref, "order_id": f"manual-{int(time.time())}",
+        "plan": plan, "email": email, "created_at": datetime.utcnow().isoformat(),
+        "expires_at": (datetime.utcnow() + timedelta(days=30)).isoformat(), "active": True
     }
     save_subscriptions(subs)
     log.info(f"Manual code created: {code} plan={plan} email={email}")
-    return jsonify({
-        "success":     True,
-        "access_code": code,
-        "plan":        plan,
-        "expires_at":  subs[code]["expires_at"]
-    })
+    return jsonify({"success": True, "access_code": code, "plan": plan, "expires_at": subs[code]["expires_at"]})
 
 @app.route("/subscription/admin")
 def admin_subscriptions():
-    """Admin view of all subscriptions."""
     if request.args.get("key") != ADMIN_KEY:
         return jsonify({"error": "unauthorized"}), 401
     subs = load_subscriptions()
@@ -1395,7 +1211,6 @@ def admin_subscriptions():
 
 # ── STARTUP ───────────────────────────────────────────────
 load_token()
-# Auto-refresh token at startup if not valid
 if not get_token():
     log.info("No valid token at startup - attempting auto-refresh...")
     threading.Thread(target=auto_refresh_token, daemon=True).start()
@@ -1404,10 +1219,9 @@ threading.Thread(target=bg_warm_cache, daemon=True).start()
 threading.Thread(target=bg_keep_alive, daemon=True).start()
 threading.Thread(target=bg_auto_refresh, daemon=True).start()
 log.info("=" * 50)
-log.info("WaveEdge API v5.1 — Upstox Edition")
+log.info("WaveEdge API v5.2 — Supabase Edition")
 log.info(f"Token valid: {bool(get_token())}")
-if not get_token():
-    log.info(f"LOGIN URL: {SELF_URL}/upstox/login")
+log.info(f"Supabase configured: {bool(SUPABASE_URL and SUPABASE_KEY)}")
 log.info("=" * 50)
 
 if __name__ == "__main__":
